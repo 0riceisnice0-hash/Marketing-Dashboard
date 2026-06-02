@@ -379,12 +379,43 @@ textarea:focus {
   line-height: 1.4;
 }
 
+.board-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-input {
+  width: min(320px, 48vw);
+  min-height: 40px;
+}
+
+.result-note {
+  margin: -4px 0 14px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
 .column {
   min-width: 0;
   padding: 13px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--soft);
+}
+
+.column .card-list {
+  max-height: 68vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.dashboard-list {
+  max-height: 430px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .card-list {
@@ -475,6 +506,21 @@ textarea:focus {
 .pill.status-inbox {
   background: #fff1dc;
   color: var(--amber);
+}
+
+.pill.status-easy {
+  background: #e5f5ee;
+  color: var(--green);
+}
+
+.pill.status-medium {
+  background: #fff1dc;
+  color: var(--amber);
+}
+
+.pill.status-complex {
+  background: #fae8e7;
+  color: var(--red);
 }
 
 .actions {
@@ -576,10 +622,183 @@ dialog::backdrop {
   padding: 22px;
 }
 
+.modal-intro {
+  margin: 10px 42px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .close {
   position: absolute;
   top: 14px;
   right: 14px;
+}
+
+.notes-list {
+  display: grid;
+  gap: 10px;
+  max-height: 260px;
+  overflow: auto;
+  margin: 16px 0;
+}
+
+.note {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  padding: 12px;
+}
+
+.note header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.note p {
+  margin: 8px 0 0;
+  line-height: 1.45;
+}
+
+.action-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  gap: 16px;
+  align-items: stretch;
+  margin-bottom: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow-small);
+}
+
+.action-hero h3 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 1;
+}
+
+.action-hero p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.progress-card {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.bar {
+  height: 12px;
+  border-radius: 999px;
+  background: #dfe6ef;
+  overflow: hidden;
+}
+
+.bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--blue);
+}
+
+.plan-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.plan-filters button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 13px;
+  font-weight: 900;
+}
+
+.plan-filters button.active,
+.plan-filters button:hover {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+
+.plan-summary {
+  margin-bottom: 16px;
+}
+
+.plan-sections {
+  display: grid;
+  gap: 14px;
+}
+
+.plan-section {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow-small);
+}
+
+.plan-items {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.plan-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  padding: 13px;
+}
+
+.plan-item.is-done {
+  opacity: 0.68;
+}
+
+.plan-item.is-done strong {
+  text-decoration: line-through;
+}
+
+.checkline {
+  display: flex;
+  grid-template-columns: none;
+  align-items: start;
+  gap: 10px;
+  color: var(--ink);
+}
+
+.checkline input {
+  width: 18px;
+  min-height: 18px;
+  margin-top: 2px;
+}
+
+.checkline span {
+  display: grid;
+  gap: 7px;
+}
+
+.checkline small {
+  width: fit-content;
+}
+
+.plan-item p {
+  margin: 10px 0 0 28px;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 @media (max-width: 1180px) {
@@ -587,7 +806,9 @@ dialog::backdrop {
   .columns,
   .columns.three,
   .two,
-  .tool-grid {
+  .tool-grid,
+  .action-hero,
+  .plan-items {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -623,7 +844,13 @@ dialog::backdrop {
   .columns.three,
   .two,
   .tool-grid,
+  .action-hero,
+  .plan-items,
   .tabs {
     grid-template-columns: 1fr;
+  }
+
+  .search-input {
+    width: 100%;
   }
 }

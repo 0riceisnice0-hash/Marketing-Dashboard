@@ -66,6 +66,20 @@
       </form>
     </dialog>
 
+    <dialog id="notes-modal">
+      <form method="dialog" class="modal-card">
+        <button class="icon-button close" value="cancel" aria-label="Close">x</button>
+        <h3 id="notes-title">Ticket notes</h3>
+        <p id="notes-subtitle" class="modal-intro"></p>
+        <div id="notes-list" class="notes-list"></div>
+        <label>
+          Add update
+          <textarea id="note-body" placeholder="What changed, what was done, or what is blocking it?"></textarea>
+        </label>
+        <button id="note-submit" class="primary-button" value="default">Add note</button>
+      </form>
+    </dialog>
+
     <script src="/app.js" type="module"></script>
   </body>
 </html>

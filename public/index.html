@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Marketing Dashboard</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main id="login" class="login-view">
+      <section class="login-panel">
+        <p class="eyebrow">Marketing operations</p>
+        <h1>Marketing Dashboard</h1>
+        <form id="login-form">
+          <label>
+            User
+            <select name="username">
+              <option value="zac">Zac</option>
+              <option value="adam">Adam</option>
+              <option value="nick">Nick</option>
+            </select>
+          </label>
+          <label>
+            Password
+            <input name="password" type="password" autocomplete="current-password">
+          </label>
+          <button type="submit">Sign in</button>
+          <p id="login-error" class="error" aria-live="polite"></p>
+        </form>
+      </section>
+    </main>
+
+    <div id="app" class="app-shell" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="mark">M</span>
+          <div>
+            <strong>Marketing Hub</strong>
+            <small id="active-user"></small>
+          </div>
+        </div>
+        <nav id="tabs" class="tabs" aria-label="Dashboard tabs"></nav>
+        <button id="logout" class="ghost-button">Sign out</button>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">All-in-one control room</p>
+            <h2 id="view-title">Dashboard</h2>
+          </div>
+          <button id="quick-add" class="primary-button">New ticket</button>
+        </header>
+
+        <section id="view"></section>
+      </section>
+    </div>
+
+    <dialog id="modal">
+      <form method="dialog" class="modal-card">
+        <button class="icon-button close" value="cancel" aria-label="Close">x</button>
+        <h3 id="modal-title">New item</h3>
+        <div id="modal-fields"></div>
+        <button id="modal-submit" class="primary-button" value="default">Save</button>
+      </form>
+    </dialog>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

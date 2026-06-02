@@ -1,0 +1,4 @@
+PASSWORD_ZAC=change-this
+PASSWORD_ADAM=change-this
+PASSWORD_NICK=change-this
+SESSION_SECRET=change-this-local-session-secret

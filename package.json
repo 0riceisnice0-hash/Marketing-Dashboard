@@ -6,7 +6,7 @@
   "description": "Cloudflare Pages marketing operations dashboard.",
   "scripts": {
     "dev": "wrangler pages dev public --d1 DB=marketing_dashboard",
-    "deploy": "wrangler pages deploy public",
+    "deploy": "wrangler pages deploy public --project-name marketing-dashboard",
     "db:migrate:local": "wrangler d1 migrations apply marketing_dashboard --local",
     "db:migrate:remote": "wrangler d1 migrations apply marketing_dashboard --remote",
     "smoke": "node ./scripts/smoke-test.mjs"

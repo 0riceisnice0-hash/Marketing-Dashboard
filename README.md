@@ -2,6 +2,14 @@
 
 All-in-one marketing operations dashboard for tickets, ideas, tasks, content requests, website work, tools, and shipped updates.
 
+## Live app
+
+Use the Cloudflare Pages URL for the real dashboard:
+
+https://marketing-dashboard-1d0.pages.dev
+
+GitHub Pages is only static hosting and cannot run the login API, Cloudflare Functions, or D1 database. Do not use the GitHub Pages URL for the working app.
+
 ## Stack
 
 - Cloudflare Pages for the frontend.
@@ -32,25 +40,28 @@ For Cloudflare, add those same names as Pages/Workers secrets before using real 
 
 ## Cloudflare setup
 
-1. Create a Cloudflare Pages project connected to this GitHub repository.
-2. Set build command to blank or `npm run deploy` only if deploying from CLI.
-3. Set output directory to `public`.
-4. Create a D1 database named `marketing_dashboard`.
-5. Replace `database_id` in `wrangler.toml` with the D1 database ID.
-6. Run the migration:
+The current project is deployed to Cloudflare Pages as `marketing-dashboard`, backed by the D1 database `marketing_dashboard`.
+
+For a fresh setup:
+
+1. Create a Cloudflare Pages project named `marketing-dashboard`.
+2. Set output directory to `public`.
+3. Create a D1 database named `marketing_dashboard`.
+4. Replace `database_id` in `wrangler.toml` with the D1 database ID.
+5. Run the migration:
 
 ```bash
 npm install
 npm run db:migrate:remote
 ```
 
-7. Add a Pages/Workers secret named `SESSION_SECRET`:
+6. Add a Pages/Workers secret named `SESSION_SECRET`:
 
 ```bash
 npx wrangler pages secret put SESSION_SECRET
 ```
 
-8. Add the three password secrets:
+7. Add the three password secrets:
 
 ```bash
 npx wrangler pages secret put PASSWORD_ZAC
@@ -67,6 +78,8 @@ npm run dev
 ```
 
 Open the local URL from Wrangler and sign in with one of the temporary users.
+
+Local development is optional. The live dashboard runs on Cloudflare and does not require your personal machine to stay on.
 
 ## What is included
 

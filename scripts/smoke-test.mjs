@@ -6,6 +6,8 @@ const tables = {
   tasks: [],
   todays_plan: [],
   social_posts: [],
+  social_guidelines: [],
+  action_plan_items: [],
   content_requests: [],
   website_updates: [],
   changelog: [],
@@ -98,6 +100,15 @@ const plan = await call("/api/records/todays_plan", {
 });
 
 assert(plan.status === 201, "today's plan create should work");
+const planJson = await plan.json();
+
+const parkedPlan = await call("/api/records/todays_plan", {
+  method: "PATCH",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({ id: planJson.id, status: "Parked" })
+});
+
+assert(parkedPlan.status === 200, "today's plan should be parkable");
 
 const seed = await call("/api/fenster/demo/seed", {
   method: "POST",
@@ -170,6 +181,53 @@ const social = await call("/api/records/social_posts", {
 });
 
 assert(social.status === 201, "social post create should work");
+
+const guideline = await call("/api/records/social_guidelines", {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({
+    title: "Smoke guideline",
+    category: "Brand voice",
+    body: "Keep social captions helpful and direct."
+  })
+});
+
+assert(guideline.status === 201, "social guideline create should work");
+
+const actionItem = await call("/api/records/action_plan_items", {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({
+    title: "Smoke action item",
+    section: "Custom",
+    effort: "easy",
+    detail: "Created by smoke test.",
+    status: "Active"
+  })
+});
+
+assert(actionItem.status === 201, "custom action plan item create should work");
+
+const idea = await call("/api/records/ideas", {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({
+    title: "Smoke idea",
+    author: "Zac",
+    impact: "Medium",
+    status: "Inbox",
+    detail: "Created by smoke test."
+  })
+});
+
+const ideaJson = await idea.json();
+const approvedIdea = await call("/api/records/ideas", {
+  method: "PATCH",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({ id: ideaJson.id, status: "Approved" })
+});
+
+assert(approvedIdea.status === 200, "ideas should be approvable");
 
 const deleteTicket = await call("/api/records/tickets", {
   method: "DELETE",

@@ -6,6 +6,8 @@ const TABLES = {
   tasks: ["title", "lane", "owner", "due_date", "done"],
   todays_plan: ["title", "owner", "status", "notes", "updated_by"],
   social_posts: ["title", "platform", "content_type", "status", "scheduled_for", "owner", "notes"],
+  social_guidelines: ["title", "category", "body"],
+  action_plan_items: ["title", "section", "effort", "detail", "status"],
   content_requests: ["title", "requester", "asset_type", "deadline", "status", "detail"],
   website_updates: ["title", "area", "status", "release_date", "detail"],
   changelog: ["title", "shipped_at", "area", "detail"]

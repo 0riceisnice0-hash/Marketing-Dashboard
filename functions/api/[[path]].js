@@ -180,6 +180,7 @@ async function fenster(context, route, user) {
   if (request.method === "POST" && route === "bot/start") return fensterSetBotActive(env, true, user);
   if (request.method === "POST" && route === "bot/stop") return fensterSetBotActive(env, false, user);
   if (request.method === "POST" && route === "bot/process") return json(await processBotQueue(env, user.name));
+  if (request.method === "POST" && route === "bot/prompt") return fensterUpdatePromptContext(env, request, user);
 
   const draftMatch = route.match(/^conversations\/([^/]+)\/(draft|generate-draft|send|hide|reject|email-office)$/);
   if (draftMatch && request.method === "POST") {
@@ -196,6 +197,7 @@ async function fensterState(env) {
   const events = await fensterRows(env, "fenster_events", "created_at DESC");
   const queue = await fensterQueue(env);
   const botActive = await isBotActive(env);
+  const promptContext = await getPromptContext(env);
 
   return json({
     conversations,
@@ -205,7 +207,8 @@ async function fensterState(env) {
       active: botActive,
       queue,
       waitingToSend: queue.filter((item) => item.status === "pending" && item.action === "SEND_REPLY").length,
-      waitingForHuman: conversations.filter((item) => item.decision_action === "FLAG_HUMAN" && latestInboundMessage(item)).length
+      waitingForHuman: conversations.filter((item) => item.decision_action === "FLAG_HUMAN" && latestInboundMessage(item)).length,
+      promptContext
     },
     config: {
       openAi: Boolean(env.OPENAI_API_KEY),
@@ -244,6 +247,35 @@ async function setBotSetting(env, active) {
   await env.DB.prepare(
     "INSERT INTO fenster_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"
   ).bind("bot_active", active ? "true" : "false").run();
+}
+
+async function getSetting(env, key, fallback = "") {
+  const row = await env.DB.prepare("SELECT value FROM fenster_settings WHERE key = ?").bind(key).first();
+  return row?.value || fallback;
+}
+
+async function setSetting(env, key, value) {
+  await env.DB.prepare(
+    "INSERT INTO fenster_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"
+  ).bind(key, value).run();
+}
+
+function defaultPromptContext() {
+  return `Extra AI context and rules:
+- Never say warranties or guarantees are transferable.
+- If asked about warranty or guarantee transfer, say the office team can confirm the exact position for that product/order.`;
+}
+
+async function getPromptContext(env) {
+  return getSetting(env, "ai_prompt_context", defaultPromptContext());
+}
+
+async function fensterUpdatePromptContext(env, request, user) {
+  const body = await request.json().catch(() => ({}));
+  const promptContext = String(body.promptContext || "").trim() || defaultPromptContext();
+  await setSetting(env, "ai_prompt_context", promptContext);
+  await fensterEvent(env, "bot.prompt_updated", { by: user.name });
+  return fensterState(env);
 }
 
 async function fensterSetBotActive(env, active, user) {
@@ -543,7 +575,7 @@ async function generateDecision(env, conversation) {
     },
     body: JSON.stringify({
       model: env.OPENAI_MODEL || "gpt-5.1",
-      instructions: fensterInstructions(),
+      instructions: await fensterInstructions(env),
       input: [
         ...compactHistory(conversation),
         {
@@ -571,7 +603,8 @@ function extractOpenAiText(data) {
   return chunks.join("\n").trim();
 }
 
-function fensterInstructions() {
+async function fensterInstructions(env) {
+  const extraContext = await getPromptContext(env);
   return `You are the customer enquiry assistant for Fenster Glazing.
 
 Your job is to decide whether an incoming Facebook or Instagram message should receive an automatic reply, be ignored, or be flagged for a human.
@@ -603,7 +636,10 @@ For new enquiries, collect name, phone, email, postcode or town, product wanted,
 
 If asked for a quote, price, cost, estimate, or how to get pricing, keep the reply short. Give the direct Instant Pricing link first: https://fensterglazing.com/instant-pricing/. Then say they can call 01908 429200 or email info@fensterglazing.com. Then say that if they want to schedule a callback, they can leave their name, phone number, and any extra details. Do not ask for a long list of details in quote replies.
 
-Never offer legal planning advice as fact. Never promise an exact fitting date. Never diagnose repair issues from a message alone. Never mention being an AI unless asked. Never handle complaints, warranty issues, invoices, refunds, cancellations, existing job problems, or messages for named staff automatically.
+Never offer legal planning advice as fact. Never promise an exact fitting date. Never diagnose repair issues from a message alone. Never mention being an AI unless asked. Never handle complaints, warranty issues, invoices, refunds, cancellations, existing job problems, or messages for named staff automatically. Never say warranties or guarantees are transferable.
+
+Editable extra context:
+${extraContext}
 
 Return valid JSON only.`;
 }

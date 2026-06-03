@@ -16,5 +16,17 @@ export const USERS = [
     username: "nick",
     passwordSecret: "PASSWORD_NICK",
     role: "Sales director"
+  },
+  {
+    name: "Perry",
+    username: "perry",
+    passwordSecret: "PASSWORD_ZAC",
+    role: "Office manager"
+  },
+  {
+    name: "Kerry",
+    username: "kerry",
+    passwordSecret: "PASSWORD_ZAC",
+    role: "Absolute legend"
   }
 ];

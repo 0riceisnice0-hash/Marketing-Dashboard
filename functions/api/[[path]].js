@@ -276,7 +276,9 @@ async function fensterSyncMeta(env) {
       await addFensterMessage(env, conversation.id, direction, message.message, message.id, message.created_time, message);
       importedMessages += 1;
       if (direction === "inbound") {
-        const decision = await safeGenerateDecision(env, await fensterConversation(env, conversation.id));
+        const latestConversation = await fensterConversation(env, conversation.id);
+        const decision = await safeGenerateDecision(env, latestConversation);
+        await notifyLeadIfNeeded(env, latestConversation, decision);
         await env.DB.prepare(
           "UPDATE fenster_conversations SET status = ?, draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, hidden_until_message_id = '', updated_at = ? WHERE id = ?"
         ).bind(
@@ -307,6 +309,7 @@ async function fensterRegenerateDrafts(env) {
     if (conversation.draft_status === "sent") continue;
     if (!isGeneratedPlaceholder(conversation.draft) && conversation.decision_action === "REPLY") continue;
     const decision = await safeGenerateDecision(env, conversation);
+    await notifyLeadIfNeeded(env, conversation, decision);
     await env.DB.prepare(
       "UPDATE fenster_conversations SET status = ?, draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     ).bind(statusForDecision(decision), decision.reply, draftStatusForDecision(decision), decision.action, decision.internal_note, conversation.id).run();
@@ -331,6 +334,7 @@ async function fensterConversationAction(env, request, id, action, user) {
 
   if (action === "generate-draft") {
     const decision = await safeGenerateDecision(env, conversation);
+    await notifyLeadIfNeeded(env, conversation, decision);
     await env.DB.prepare(
       "UPDATE fenster_conversations SET status = ?, draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     ).bind(statusForDecision(decision), decision.reply, draftStatusForDecision(decision), decision.action, decision.internal_note, id).run();
@@ -536,7 +540,7 @@ Use British English. Sound friendly, helpful, human, and concise. Do not invent 
 
 For new enquiries, collect name, phone, email, postcode or town, product wanted, residential or commercial, rough measurements, supply and install requirement, photos, and whether they want Instant Pricing or a team callback.
 
-If asked for a price, say: "The quickest way to get an accurate starting price is to use our Instant Pricing Tool, or I can take a few details and ask the team to come back to you."
+If asked for a quote, price, cost, estimate, or how to get pricing, keep the reply short. Give the direct Instant Pricing link first: https://fensterglazing.com/instant-pricing/. Then say they can call 01908 429200 or email info@fensterglazing.com. Then say that if they want to schedule a callback, they can leave their name, phone number, and any extra details. Do not ask for a long list of details in quote replies.
 
 Never offer legal planning advice as fact. Never promise an exact fitting date. Never diagnose repair issues from a message alone. Never mention being an AI unless asked. Never handle complaints, warranty issues, invoices, refunds, cancellations, existing job problems, or messages for named staff automatically.
 
@@ -600,6 +604,76 @@ function localDecision(conversation) {
     return flagHuman("Message asks for a named staff member or senior person.");
   }
   return null;
+}
+
+async function notifyLeadIfNeeded(env, conversation, decision) {
+  if (decision.action !== "REPLY") return;
+  if (conversation.lead_notified_at) return;
+  if (!isLeadConversation(conversation, decision)) return;
+
+  if (!env.LEAD_EMAIL_WEBHOOK_URL || !env.LEAD_EMAIL_WEBHOOK_SECRET) {
+    await fensterEvent(env, "lead.email_missing", {
+      conversationId: conversation.id,
+      internal_note: "Lead detected, but lead email Worker secrets are not configured."
+    });
+    return;
+  }
+
+  try {
+    const subject = leadEmailSubject(conversation);
+    const body = leadEmailBody(conversation, decision);
+    const response = await fetch(env.LEAD_EMAIL_WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.LEAD_EMAIL_WEBHOOK_SECRET}`
+      },
+      body: JSON.stringify({ subject, body })
+    });
+    if (!response.ok) throw new Error(`Lead email Worker returned ${response.status}: ${await response.text()}`);
+    await env.DB.prepare(
+      "UPDATE fenster_conversations SET lead_notified_at = CURRENT_TIMESTAMP, internal_note = ? WHERE id = ?"
+    ).bind("Lead email sent to info@fensterglazing.com.", conversation.id).run();
+    await fensterEvent(env, "lead.email_sent", { conversationId: conversation.id, subject });
+  } catch (error) {
+    await fensterEvent(env, "lead.email_failed", { conversationId: conversation.id, message: error.message });
+  }
+}
+
+function isLeadConversation(conversation, decision) {
+  const latest = latestInboundMessage(conversation);
+  const text = `${latest?.text || ""}\n${decision.reply || ""}`.toLowerCase();
+  return /\b(quote|quotation|price|pricing|cost|estimate|call me|call back|callback|phone me|ring me|book|survey|appointment|measure|visit|come out|windows?|doors?|bifold|composite|patio|french door|roof lantern|replacement)\b/i.test(text);
+}
+
+function leadEmailSubject(conversation) {
+  const channel = conversation.channel === "instagram" ? "Instagram" : "Facebook";
+  return `${channel} message lead - ${conversation.display_name || conversation.external_user_id || "new customer"}`;
+}
+
+function leadEmailBody(conversation, decision) {
+  const lines = [
+    "New social message lead detected.",
+    "",
+    `Channel: ${conversation.channel}`,
+    `Customer: ${conversation.display_name || ""}`,
+    `Conversation ID: ${conversation.id}`,
+    "",
+    "Bot decision:",
+    decision.reply || "(No reply text)",
+    "",
+    "Internal note:",
+    decision.internal_note || "(none)",
+    "",
+    "Exact conversation:"
+  ];
+
+  for (const message of conversation.messages || []) {
+    const who = message.direction === "outbound" ? "Fenster" : conversation.display_name || "Customer";
+    lines.push(`[${message.created_at || ""}] ${who}: ${message.text}`);
+  }
+
+  return lines.join("\n");
 }
 
 async function graphGet(env, pathAndQuery, token = env.META_PAGE_ACCESS_TOKEN) {

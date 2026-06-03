@@ -51,6 +51,13 @@ const cookie = login.headers.get("Set-Cookie");
 const me = await call("/api/me", { headers: { Cookie: cookie } });
 assert(me.status === 200, "session should verify");
 
+const perryLogin = await call("/api/login", {
+  method: "POST",
+  body: JSON.stringify({ username: "perry", password: "test-password" })
+});
+
+assert(perryLogin.status === 200, "Perry should share the dashboard password");
+
 const ticket = await call("/api/records/tickets", {
   method: "POST",
   headers: { Cookie: cookie },

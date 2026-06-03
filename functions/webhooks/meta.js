@@ -144,7 +144,7 @@ async function generateDecision(env, conversation) {
     },
     body: JSON.stringify({
       model: env.OPENAI_MODEL || "gpt-5.1",
-      instructions: fensterInstructions(),
+      instructions: await fensterInstructions(env),
       input: [
         ...(conversation.messages || []).map((message) => ({
           role: message.direction === "outbound" ? "assistant" : "user",
@@ -175,7 +175,23 @@ function extractOpenAiText(data) {
   return chunks.join("\n").trim();
 }
 
-function fensterInstructions() {
+async function getSetting(env, key, fallback = "") {
+  const row = await env.DB.prepare("SELECT value FROM fenster_settings WHERE key = ?").bind(key).first();
+  return row?.value || fallback;
+}
+
+function defaultPromptContext() {
+  return `Extra AI context and rules:
+- Never say warranties or guarantees are transferable.
+- If asked about warranty or guarantee transfer, say the office team can confirm the exact position for that product/order.`;
+}
+
+async function getPromptContext(env) {
+  return getSetting(env, "ai_prompt_context", defaultPromptContext());
+}
+
+async function fensterInstructions(env) {
+  const extraContext = await getPromptContext(env);
   return `You are the customer enquiry assistant for Fenster Glazing.
 
 Your job is to decide whether an incoming Facebook or Instagram message should receive an automatic reply, be ignored, or be flagged for a human.
@@ -203,7 +219,10 @@ For new enquiries, collect name, phone, email, postcode or town, product wanted,
 
 If asked for a quote, price, cost, estimate, or how to get pricing, keep the reply short. Give the direct Instant Pricing link first: https://fensterglazing.com/instant-pricing/. Then say they can call 01908 429200 or email info@fensterglazing.com. Then say that if they want to schedule a callback, they can leave their name, phone number, and any extra details. Do not ask for a long list of details in quote replies.
 
-Never offer legal planning advice as fact. Never promise an exact fitting date. Never diagnose repair issues from a message alone. Never mention being an AI unless asked. Never handle complaints, warranty issues, invoices, refunds, cancellations, existing job problems, or messages for named staff automatically.
+Never offer legal planning advice as fact. Never promise an exact fitting date. Never diagnose repair issues from a message alone. Never mention being an AI unless asked. Never handle complaints, warranty issues, invoices, refunds, cancellations, existing job problems, or messages for named staff automatically. Never say warranties or guarantees are transferable.
+
+Editable extra context:
+${extraContext}
 
 Return valid JSON only.`;
 }

@@ -684,6 +684,55 @@ textarea:focus {
   gap: 10px;
 }
 
+.bot-control,
+.queue-panel {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.bot-control {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+}
+
+.bot-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.queue-list {
+  display: grid;
+  gap: 8px;
+}
+
+.queue-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8fafb;
+}
+
+.queue-item div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.queue-item span,
+.queue-item time {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .metric {
   border: 1px solid var(--line);
   border-radius: 8px;

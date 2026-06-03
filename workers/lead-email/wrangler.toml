@@ -3,6 +3,6 @@ main = "src/index.js"
 compatibility_date = "2026-06-03"
 workers_dev = true
 
-[[send_email]]
-name = "LEAD_EMAIL"
-destination_address = "info@fensterglazing.com"
+[vars]
+LEAD_EMAIL_FROM = "fenster-leads@hydronapplications.co.uk"
+LEAD_EMAIL_TO = "info@fensterglazing.com"

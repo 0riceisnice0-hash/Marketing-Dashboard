@@ -5,6 +5,7 @@ const tables = {
   ideas: [],
   tasks: [],
   todays_plan: [],
+  social_posts: [],
   content_requests: [],
   website_updates: [],
   changelog: [],
@@ -94,6 +95,30 @@ assert(seed.status === 200, "Fenster demo seed should work");
 const seeded = await seed.json();
 assert(seeded.conversations.length >= 2, "Fenster state should include seeded conversations");
 
+const social = await call("/api/records/social_posts", {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({
+    title: "Smoke test social idea",
+    platform: "Instagram",
+    content_type: "Story",
+    status: "Idea",
+    scheduled_for: "",
+    owner: "Zac",
+    notes: "Created by smoke test."
+  })
+});
+
+assert(social.status === 201, "social post create should work");
+
+const deleteTicket = await call("/api/records/tickets", {
+  method: "DELETE",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({ id: (await ticket.json()).id })
+});
+
+assert(deleteTicket.status === 200, "ticket delete should work");
+
 console.log("Smoke test passed");
 
 async function call(path, init = {}) {
@@ -139,6 +164,14 @@ function run({ sql, values }) {
     columns.forEach((column, index) => {
       item[column] = values[index];
     });
+  }
+  if (sql.startsWith("DELETE")) {
+    if (sql.includes("parent_type")) {
+      const [parentType, parentId] = values;
+      tables.notes = tables.notes.filter((note) => note.parent_type !== parentType || note.parent_id !== parentId);
+      return { meta: {} };
+    }
+    tables[table] = tables[table].filter((item) => item.id !== values[0]);
   }
   return { meta: {} };
 }

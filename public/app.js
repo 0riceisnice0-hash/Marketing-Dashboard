@@ -3,6 +3,7 @@ const tabs = [
   { id: "tickets", label: "Tickets", icon: "T" },
   { id: "todays-plan", label: "Today's Plan", icon: "N" },
   { id: "action-plan", label: "Action Plan", icon: "P" },
+  { id: "social", label: "Social Media", icon: "S" },
   { id: "ideas", label: "Ideas", icon: "I" },
   { id: "roadmap", label: "Roadmap", icon: "R" },
   { id: "website", label: "Website", icon: "W" },
@@ -15,6 +16,7 @@ const viewCopy = {
   tickets: "Requests from the team, moved through a clear status board.",
   "todays-plan": "A shared plan for the day, with updates, done states, and carry-forward notes.",
   "action-plan": "The extracted Fenster marketing plan, grouped by effort and progress.",
+  social: "Content ideas, scheduled posts, Stories, Reels, and social follow-up in one place.",
   ideas: "A holding area for good ideas before they interrupt the actual work.",
   roadmap: "Today, this week, and later, without the noise.",
   website: "Website changes, launch notes, and visible progress for the team.",
@@ -126,6 +128,19 @@ const config = {
       ["updated_by", "Updated by", "hidden", "currentUser"]
     ]
   },
+  social_posts: {
+    table: "social_posts",
+    title: "Social post",
+    fields: [
+      ["title", "Content idea", "text"],
+      ["platform", "Platform", "select", ["Instagram", "Facebook", "TikTok", "LinkedIn", "Google Business Profile", "All channels"]],
+      ["content_type", "Content type", "select", ["Post", "Story", "Reel", "Poll", "Review", "Case study", "Showroom update", "Offer"]],
+      ["status", "Status", "select", ["Idea", "Planned", "Scheduled", "Posted", "Parked"]],
+      ["scheduled_for", "Scheduled for", "date"],
+      ["owner", "Owner", "hidden", "currentUser"],
+      ["notes", "Notes / caption draft", "textarea"]
+    ]
+  },
   content_requests: {
     table: "content_requests",
     title: "Content request",
@@ -168,6 +183,12 @@ let selectedFensterConversationId = null;
 let current = "dashboard";
 let user = null;
 let ticketSearch = "";
+let refreshTimer = null;
+let notificationReady = false;
+let seenTaskIds = new Set();
+let seenPlanIds = new Set();
+let seenTicketIds = new Set();
+let seenSocialIds = new Set();
 
 const $ = (selector) => document.querySelector(selector);
 const view = $("#view");
@@ -233,7 +254,84 @@ async function loadApp() {
   window.scrollTo({ top: 0, behavior: "instant" });
   $("#active-user").textContent = `${user.name} - ${user.role}`;
   state = await api("/api/bootstrap");
+  captureSeenItems();
+  await enableNotifications();
+  startAutoRefresh();
   render();
+}
+
+function startAutoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(refreshDashboard, 30000);
+}
+
+async function refreshDashboard() {
+  if ($("#modal")?.open || $("#notes-modal")?.open) return;
+  try {
+    const next = await api("/api/bootstrap");
+    notifyNewItems(next);
+    state = next;
+    if (current === "tools") await loadFenster();
+    else render();
+  } catch (error) {
+    console.warn("Dashboard refresh failed", error);
+  }
+}
+
+async function enableNotifications() {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "granted") {
+    notificationReady = true;
+    return;
+  }
+  if (Notification.permission === "default") {
+    try {
+      notificationReady = await Notification.requestPermission() === "granted";
+    } catch {
+      notificationReady = false;
+    }
+  }
+}
+
+function captureSeenItems() {
+  seenTaskIds = new Set((state.tasks || []).map((item) => item.id));
+  seenPlanIds = new Set((state.todays_plan || []).map((item) => item.id));
+  seenTicketIds = new Set((state.tickets || []).map((item) => item.id));
+  seenSocialIds = new Set((state.social_posts || []).map((item) => item.id));
+}
+
+function notifyNewItems(next) {
+  const newTasks = (next.tasks || []).filter((item) => !seenTaskIds.has(item.id));
+  const newPlans = (next.todays_plan || []).filter((item) => !seenPlanIds.has(item.id));
+  const newTickets = (next.tickets || []).filter((item) => !seenTicketIds.has(item.id));
+  const newSocial = (next.social_posts || []).filter((item) => !seenSocialIds.has(item.id));
+  [...newTasks, ...newPlans, ...newTickets, ...newSocial].forEach((item) => {
+    const type = newTasks.includes(item)
+      ? "New task"
+      : newPlans.includes(item)
+        ? "New plan item"
+        : newSocial.includes(item)
+          ? "New social idea"
+          : "New ticket";
+    sendBrowserNotification(type, item.title || "Untitled");
+  });
+  captureSeenFrom(next);
+}
+
+function captureSeenFrom(next) {
+  seenTaskIds = new Set((next.tasks || []).map((item) => item.id));
+  seenPlanIds = new Set((next.todays_plan || []).map((item) => item.id));
+  seenTicketIds = new Set((next.tickets || []).map((item) => item.id));
+  seenSocialIds = new Set((next.social_posts || []).map((item) => item.id));
+}
+
+function sendBrowserNotification(title, body) {
+  if (!notificationReady || !("Notification" in window)) return;
+  new Notification(title, {
+    body,
+    icon: "/fenster-logo.png",
+    tag: `${title}:${body}`
+  });
 }
 
 function render() {
@@ -248,6 +346,7 @@ function render() {
     tickets: () => renderBoard("tickets", "status", ["New", "In Progress", "Waiting on Someone", "Done"]),
     "todays-plan": renderTodaysPlan,
     "action-plan": renderActionPlan,
+    social: renderSocial,
     ideas: () => renderBoard("ideas", "status", ["Inbox", "Considering", "Approved", "Parked", "Done"]),
     roadmap: renderRoadmap,
     website: renderWebsite,
@@ -260,6 +359,10 @@ function render() {
 
 function renderTodaysPlan() {
   renderBoard("todays_plan", "status", ["Planned", "Doing", "Done", "Carry on tomorrow"]);
+}
+
+function renderSocial() {
+  renderBoard("social_posts", "status", ["Idea", "Planned", "Scheduled", "Posted", "Parked"]);
 }
 
 function renderActionPlan() {
@@ -822,6 +925,7 @@ function boardHint(table) {
   const hints = {
     tickets: "Move requests across the board as they progress. The action buttons are workflow moves.",
     todays_plan: "Anyone can add the day's plan, add notes, mark it done, or carry it forward tomorrow.",
+    social_posts: "Plan social ideas, draft captions, schedule content, and keep posted work visible.",
     ideas: "Capture ideas here, then decide whether they become real work.",
     content_requests: "Keep asset requests visible so photos, reviews, and videos do not get lost."
   };
@@ -871,6 +975,11 @@ function metaFor(item, table) {
       ["Status", item.status, "status"],
       ["Updated by", item.updated_by, "author"]
     ],
+    social_posts: [
+      ["Platform", item.platform, "platform"],
+      ["Type", item.content_type, "asset_type"],
+      ["Scheduled", item.scheduled_for, "deadline"]
+    ],
     content_requests: [
       ["Asset", item.asset_type, "asset_type"],
       ["From", item.requester, "requester"],
@@ -898,10 +1007,16 @@ function actionButtons(item, table) {
   if (table === "todays_plan") {
     return workflowButtons(table, item, "status", ["Doing", "Done", "Carry on tomorrow", "Planned"]);
   }
+  if (table === "social_posts") {
+    return workflowButtons(table, item, "status", ["Planned", "Scheduled", "Posted", "Parked", "Idea"]);
+  }
   if (table === "tickets") {
     return `
       ${workflowButtons(table, item, "status", ["In Progress", "Waiting on Someone", "Done"])}
-      <div class="actions"><button onclick="window.dashboardOpenNotes(${item.id})">Notes</button></div>
+      <div class="actions">
+        <button onclick="window.dashboardOpenNotes(${item.id})">Notes</button>
+        <button class="danger-action" onclick="window.dashboardDeleteTicket(${item.id})">Delete</button>
+      </div>
     `;
   }
   if (table === "content_requests") {
@@ -974,12 +1089,29 @@ function withDefaults(table, body) {
       ...body
     };
   }
+  if (table === "social_posts") {
+    return {
+      owner: user.name,
+      status: "Idea",
+      ...body
+    };
+  }
   return body;
 }
 
 async function patchRecord(table, id, patch) {
   const updated = await api(`/api/records/${table}`, { method: "PATCH", body: { id, ...patch } });
   state[table] = (state[table] || []).map((item) => item.id === id ? updated : item);
+  render();
+}
+
+async function deleteTicket(id) {
+  const ticket = (state.tickets || []).find((item) => item.id === id);
+  if (!ticket) return;
+  if (!confirm(`Delete ticket #${id}: ${ticket.title || "Untitled"}? This also removes its notes.`)) return;
+  await api("/api/records/tickets", { method: "DELETE", body: { id } });
+  state.tickets = (state.tickets || []).filter((item) => item.id !== id);
+  seenTicketIds.delete(id);
   render();
 }
 
@@ -1043,6 +1175,7 @@ function slug(value) {
 
 window.dashboardOpen = openModal;
 window.dashboardPatch = patchRecord;
+window.dashboardDeleteTicket = deleteTicket;
 window.dashboardSearchTickets = searchTickets;
 window.dashboardOpenNotes = openNotes;
 window.dashboardFilterPlan = filterPlan;

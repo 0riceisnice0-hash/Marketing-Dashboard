@@ -5,6 +5,7 @@ const TABLES = {
   ideas: ["title", "author", "impact", "status", "detail"],
   tasks: ["title", "lane", "owner", "due_date", "done"],
   todays_plan: ["title", "owner", "status", "notes", "updated_by"],
+  social_posts: ["title", "platform", "content_type", "status", "scheduled_for", "owner", "notes"],
   content_requests: ["title", "requester", "asset_type", "deadline", "status", "detail"],
   website_updates: ["title", "area", "status", "release_date", "detail"],
   changelog: ["title", "shipped_at", "area", "detail"]
@@ -107,6 +108,17 @@ async function records(context, table) {
     ).bind(...keys.map((key) => updates[key]), id).run();
 
     return json(await selectOne(env, table, id));
+  }
+
+  if (request.method === "DELETE") {
+    const body = await request.json();
+    const id = Number(body.id);
+    if (!id) return json({ error: "An id is required" }, 400);
+    if (table === "tickets") {
+      await env.DB.prepare("DELETE FROM notes WHERE parent_type = ? AND parent_id = ?").bind(table, id).run();
+    }
+    await env.DB.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(id).run();
+    return json({ ok: true, id });
   }
 
   return json({ error: "Method not allowed" }, 405);

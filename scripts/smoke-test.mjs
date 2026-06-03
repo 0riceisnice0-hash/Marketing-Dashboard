@@ -13,7 +13,9 @@ const tables = {
   fenster_conversations: [],
   fenster_messages: [],
   fenster_reviews: [],
-  fenster_events: []
+  fenster_events: [],
+  fenster_settings: [{ key: "bot_active", value: "false" }],
+  fenster_bot_queue: []
 };
 
 let forcedUuid = 1;
@@ -192,6 +194,7 @@ function queryAll({ sql, values }) {
 function queryFirst({ sql, values }) {
   const table = tableFrom(sql);
   if (!sql.includes("WHERE")) return tables[table][0] || null;
+  if (table === "fenster_settings") return tables[table].find((item) => item.key === values[0]) || null;
   return tables[table].find((item) => item.id === values[0]) || null;
 }
 
@@ -207,8 +210,14 @@ function run({ sql, values }) {
     return { meta: { last_row_id: item.id } };
   }
   if (sql.startsWith("UPDATE")) {
-    const item = tables[table].find((row) => row.id === values.at(-1));
+    const item = table === "fenster_settings"
+      ? tables[table].find((row) => row.key === values[0])
+      : tables[table].find((row) => row.id === values.at(-1));
     if (!item) return { meta: {} };
+    if (table === "fenster_settings") {
+      item.value = values[1];
+      return { meta: {} };
+    }
     const columns = sql.match(/SET (.+), updated_at/)[1].split(",").map((part) => part.split("=")[0].trim());
     columns.forEach((column, index) => {
       item[column] = values[index];

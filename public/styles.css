@@ -521,16 +521,29 @@ textarea:focus {
 .pill.status-planned,
 .pill.status-this-week,
 .pill.status-considering,
-.pill.status-requested {
+.pill.status-requested,
+.pill.status-scheduled {
   background: #e7eefc;
   color: var(--blue);
 }
 
 .pill.status-waiting-on-someone,
 .pill.status-needed,
-.pill.status-inbox {
+.pill.status-inbox,
+.pill.status-idea {
   background: #fff1dc;
   color: var(--amber);
+}
+
+.pill.status-posted {
+  background: #e5f5ee;
+  color: var(--green);
+}
+
+.pill.status-parked,
+.pill.status-carry-on-tomorrow {
+  background: #eef1ef;
+  color: var(--muted);
 }
 
 .pill.status-easy {

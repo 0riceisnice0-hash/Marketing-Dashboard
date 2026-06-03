@@ -798,6 +798,7 @@ function renderFensterDetail(conversation) {
         <button onclick="window.dashboardFensterGenerate()" ${canGenerate ? "" : "disabled"}>Generate draft</button>
         <button onclick="window.dashboardFensterSaveDraft()">Save edit</button>
         <button class="primary-button" onclick="window.dashboardFensterSend()" ${canSend ? "" : "disabled"}>Approve and send</button>
+        <button onclick="window.dashboardFensterEmailOffice()">Send email to info@</button>
         <button onclick="window.dashboardFensterReject()">Reject decision</button>
         <button onclick="window.dashboardFensterHide()" ${canHide ? "" : "disabled"}>Hide</button>
         <span class="meta">${escapeHtml(conversation.draft_status)}</span>
@@ -894,6 +895,16 @@ async function fensterSend() {
       confirm: `SEND:${selectedFensterConversationId}`
     }
   }, "Sending reply...");
+}
+
+async function fensterEmailOffice() {
+  if (!selectedFensterConversationId) return;
+  const conversation = selectedFensterConversation();
+  if (!confirm(`Forward this full chat to info@fensterglazing.com for ${conversation?.display_name || "this selected user"}?`)) return;
+  await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/email-office`, {
+    method: "POST",
+    body: { note: "Manual office email requested from the dashboard." }
+  }, "Emailing office...");
 }
 
 async function fensterReject() {
@@ -1226,5 +1237,6 @@ window.dashboardFensterSelect = fensterSelect;
 window.dashboardFensterGenerate = fensterGenerate;
 window.dashboardFensterSaveDraft = fensterSaveDraft;
 window.dashboardFensterSend = fensterSend;
+window.dashboardFensterEmailOffice = fensterEmailOffice;
 window.dashboardFensterReject = fensterReject;
 window.dashboardFensterHide = fensterHide;

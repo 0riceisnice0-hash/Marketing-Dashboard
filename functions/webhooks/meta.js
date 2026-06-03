@@ -184,11 +184,11 @@ Return valid JSON only with exactly these keys: action, reply, internal_note.
 Allowed actions:
 REPLY: normal customer enquiry, quote request, product question, appointment request, showroom question, pricing question, or general sales conversation.
 NO_REPLY: thanks, thank you, okay, cheers, sounds good, thumbs-up style messages, short acknowledgements ending the conversation, duplicate messages, or automated spam with no useful enquiry.
-FLAG_HUMAN: complaint, angry customer, warranty issue, existing job issue, supplier/trade message, message asking for a specific person/director/boss/manager/Nick/Perry/Adam/Jayk/named staff member, legal/planning/payment/invoice/refund/cancellation/contract issue, anything unclear or risky, internal/boss/team messages, sensitive personal situations, or anything outside Fenster Glazing's normal products and services.
+FLAG_HUMAN: complaint, angry customer, warranty issue, existing job issue, supplier/trade message, message asking for a specific person/director/boss/manager/Nick/Perry/Adam/Jayk/named staff member, legal/planning/payment/invoice/refund/cancellation/contract issue, callback request, phone number supplied, appointment/survey time supplied, anything unclear or risky, internal/boss/team messages, sensitive personal situations, or anything outside Fenster Glazing's normal products and services.
 
 For REPLY, set reply to the customer-facing reply and internal_note to an empty string unless there is something useful for the team.
 For NO_REPLY, set reply to an empty string and internal_note to the reason.
-For FLAG_HUMAN, set reply to an empty string and internal_note to what the team should check.
+For FLAG_HUMAN, set reply to an empty string and internal_note to what the team should check. If the customer gives a phone number, asks for a call, asks for a callback, gives a preferred time, or provides enough quote details for the office to follow up, always use FLAG_HUMAN so the office team can handle it directly.
 
 Fenster Glazing supplies and installs high-quality windows and doors for residential and commercial customers. The company is based at 97-98 Alston Drive, Bradwell Abbey, Milton Keynes, Buckinghamshire, MK13 9HF. Phone: 01908 429200. Email: info@fensterglazing.com.
 
@@ -261,6 +261,9 @@ function localDecision(conversation) {
   if (text.length <= 14 && /^(yes|no|ok|okay|thanks|cheers|done|great|perfect|cool|fine|alright|👍|👌)/i.test(normal)) {
     return noReply("Short acknowledgement; no reply needed.");
   }
+  if (hasCallbackDetails(text)) {
+    return flagHuman("Customer supplied callback/contact details. Forward to the office team and let a human confirm.");
+  }
   if (/\b(complaint|complain|angry|unhappy|disappointed|terrible|awful|poor service|not happy|warranty|guarantee|repair|broken|leaking|leak|fault|faulty|existing job|job number|invoice|payment|refund|cancel|cancellation|contract|legal|solicitor|planning permission)\b/i.test(text)) {
     return flagHuman("Complaint, warranty, existing job, payment, legal, planning, or repair issue.");
   }
@@ -271,7 +274,7 @@ function localDecision(conversation) {
 }
 
 async function notifyLeadIfNeeded(env, conversation, decision) {
-  if (decision.action !== "REPLY") return;
+  if (!["REPLY", "FLAG_HUMAN"].includes(decision.action)) return;
   if (conversation.lead_notified_at) return;
   if (!isLeadConversation(conversation, decision)) return;
 
@@ -310,6 +313,13 @@ function isLeadConversation(conversation, decision) {
   return /\b(quote|quotation|price|pricing|cost|estimate|call me|call back|callback|phone me|ring me|book|survey|appointment|measure|visit|come out|windows?|doors?|bifold|composite|patio|french door|roof lantern|replacement)\b/i.test(text);
 }
 
+function hasCallbackDetails(text) {
+  const hasPhone = /(?:\+44\s?7\d{3}|\b07\d{3})\s?\d{3}\s?\d{3}\b/.test(text);
+  const hasTime = /\b(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s?(?:am|pm)?\b/i.test(text) && /\b(call|callback|ring|phone|tomorrow|today|morning|afternoon|evening)\b/i.test(text);
+  const asksCall = /\b(call me|call back|callback|phone me|ring me|give me a call|schedule a call|book a call)\b/i.test(text);
+  return hasPhone || asksCall || hasTime;
+}
+
 function leadEmailSubject(conversation) {
   const channel = conversation.channel === "instagram" ? "Instagram" : "Facebook";
   return `${channel} message lead - ${conversation.display_name || conversation.external_user_id || "new customer"}`;
@@ -322,9 +332,13 @@ function leadEmailBody(conversation, decision) {
     `Channel: ${conversation.channel}`,
     `Customer: ${conversation.display_name || ""}`,
     `Conversation ID: ${conversation.id}`,
+    `Dashboard: https://marketing-dashboard-1d0.pages.dev/`,
+    "",
+    "Office action:",
+    "Please review this lead in the Marketing Dashboard and contact the customer directly. Once handled, reply/confirm in the dashboard rather than sending an automatic bot reply.",
     "",
     "Bot decision:",
-    decision.reply || "(No reply text)",
+    decision.action,
     "",
     "Internal note:",
     decision.internal_note || "(none)",

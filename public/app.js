@@ -819,7 +819,7 @@ function decisionHelp(decision) {
   return {
     REPLY: "Review the suggested reply, then approve and send if it is right.",
     NO_REPLY: "The bot thinks this should be logged without sending anything.",
-    FLAG_HUMAN: "This needs a real person before any response is sent.",
+    FLAG_HUMAN: "This has been offloaded to the office team. Do not auto-send a bot reply.",
     PENDING: "Generate a decision before sending."
   }[decision] || "";
 }

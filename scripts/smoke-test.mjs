@@ -16,6 +16,8 @@ const tables = {
   fenster_events: []
 };
 
+let forcedUuid = 1;
+
 let nextId = 1;
 
 const env = {
@@ -102,6 +104,42 @@ assert(seed.status === 200, "Fenster demo seed should work");
 const seeded = await seed.json();
 assert(seeded.conversations.length >= 2, "Fenster state should include seeded conversations");
 
+const callbackId = `callback-${forcedUuid++}`;
+tables.fenster_conversations.push({
+  id: callbackId,
+  channel: "facebook",
+  external_user_id: "demo-callback",
+  display_name: "Callback Lead",
+  status: "new",
+  draft: "",
+  draft_status: "none",
+  decision_action: "",
+  internal_note: "",
+  lead_notified_at: "",
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString()
+});
+tables.fenster_messages.push({
+  id: `message-${forcedUuid++}`,
+  conversation_id: callbackId,
+  external_id: "callback-message",
+  direction: "inbound",
+  text: "Yeah give me a call at 3pm - 07926037173. Interested in getting 5 doors",
+  raw_json: "{}",
+  created_at: new Date().toISOString()
+});
+
+const callbackDecision = await call(`/api/fenster/conversations/${callbackId}/generate-draft`, {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: "{}"
+});
+
+assert(callbackDecision.status === 200, "callback lead decision should work");
+const callbackData = await callbackDecision.json();
+assert(callbackData.decision_action === "FLAG_HUMAN", "callback leads should flag human");
+assert(callbackData.draft_status === "flag-human", "callback leads should not create a sendable draft");
+
 const social = await call("/api/records/social_posts", {
   method: "POST",
   headers: { Cookie: cookie },
@@ -145,6 +183,9 @@ function queryAll({ sql, values }) {
     const [parentType, parentId] = values;
     return { results: tables.notes.filter((note) => note.parent_type === parentType && note.parent_id === parentId) };
   }
+  if (sql.includes("WHERE conversation_id")) {
+    return { results: tables.fenster_messages.filter((message) => message.conversation_id === values[0]) };
+  }
   return { results: [...tables[table]].sort((a, b) => b.id - a.id) };
 }
 
@@ -158,7 +199,7 @@ function run({ sql, values }) {
   const table = tableFrom(sql);
   if (sql.startsWith("INSERT")) {
     const columns = sql.match(/\(([^)]+)\)/)[1].split(",").map((value) => value.trim());
-    const item = { id: nextId++ };
+    const item = columns.includes("id") ? {} : { id: nextId++ };
     columns.forEach((column, index) => {
       item[column] = values[index];
     });
@@ -167,6 +208,7 @@ function run({ sql, values }) {
   }
   if (sql.startsWith("UPDATE")) {
     const item = tables[table].find((row) => row.id === values.at(-1));
+    if (!item) return { meta: {} };
     const columns = sql.match(/SET (.+), updated_at/)[1].split(",").map((part) => part.split("=")[0].trim());
     columns.forEach((column, index) => {
       item[column] = values[index];

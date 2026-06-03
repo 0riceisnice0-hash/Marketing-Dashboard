@@ -671,7 +671,7 @@ function localDecision(conversation) {
 }
 
 async function notifyLeadIfNeeded(env, conversation, decision) {
-  if (!["REPLY", "FLAG_HUMAN"].includes(decision.action)) return;
+  if (decision.action !== "FLAG_HUMAN") return;
   if (conversation.lead_notified_at) return;
   if (!isLeadConversation(conversation, decision)) return;
 

@@ -262,7 +262,7 @@ async function loadApp() {
 
 function startAutoRefresh() {
   if (refreshTimer) clearInterval(refreshTimer);
-  refreshTimer = setInterval(refreshDashboard, 30000);
+  refreshTimer = setInterval(refreshDashboard, 60000);
 }
 
 async function refreshDashboard() {
@@ -271,7 +271,10 @@ async function refreshDashboard() {
     const next = await api("/api/bootstrap");
     notifyNewItems(next);
     state = next;
-    if (current === "tools") await loadFenster();
+    if (current === "tools") {
+      await api("/api/fenster/meta/sync", { method: "POST", body: {} });
+      await loadFenster();
+    }
     else render();
   } catch (error) {
     console.warn("Dashboard refresh failed", error);
@@ -659,6 +662,8 @@ function renderFenster() {
   const drafts = conversations.filter((item) => item.draft_status === "draft" && latestFensterMessageIsInbound(item)).length;
   const human = conversations.filter((item) => item.decision_action === "FLAG_HUMAN" && latestFensterMessageIsInbound(item)).length;
   const hidden = conversations.filter(isFensterHidden).length;
+  const bot = fensterState.bot || { active: false, queue: [], waitingToSend: 0, waitingForHuman: human };
+  const queue = bot.queue || [];
 
   if (!selectedFensterConversationId || !visible.some((item) => item.id === selectedFensterConversationId)) {
     selectedFensterConversationId = visible[0]?.id || null;
@@ -673,6 +678,32 @@ function renderFenster() {
       ${fensterMetric(hidden, "Hidden")}
       ${fensterMetric(fensterState.config.openAi ? "Connected" : "Missing", "OpenAI")}
       ${fensterMetric(fensterState.config.meta ? "Connected" : "No token", "Meta")}
+    </div>
+    <div class="bot-control">
+      <div>
+        <p class="eyebrow">Semi automatic mode</p>
+        <h3>${bot.active ? "Bot is running" : "Bot is stopped"}</h3>
+        <p class="panel-subtitle">${bot.active ? "New messages are scanned on refresh/sync. Replies wait 60 seconds before sending." : "The dashboard shows what the bot would do, but it will not send replies until started."}</p>
+      </div>
+      <div class="bot-stats">
+        ${fensterMetric(bot.waitingToSend || 0, "messages waiting to send")}
+        ${fensterMetric(bot.waitingForHuman || human, "need office")}
+      </div>
+      <div class="actions">
+        <button class="primary-button" onclick="window.dashboardFensterStartBot()" ${bot.active ? "disabled" : ""}>Start bot</button>
+        <button class="danger-action" onclick="window.dashboardFensterStopBot()" ${bot.active ? "" : "disabled"}>Stop bot</button>
+      </div>
+    </div>
+    <div class="queue-panel">
+      <div class="panel-header compact">
+        <div>
+          <h3>Event queue</h3>
+          <p class="panel-subtitle">${queue.length} recent queue item${queue.length === 1 ? "" : "s"}</p>
+        </div>
+      </div>
+      <div class="queue-list">
+        ${queue.length ? queue.slice(0, 8).map(renderQueueItem).join("") : `<p class="empty">No queued bot actions yet.</p>`}
+      </div>
     </div>
     <div class="fenster-tabs">
       ${[
@@ -702,6 +733,20 @@ function renderFenster() {
 
 function fensterMetric(value, label) {
   return `<article class="metric"><strong>${escapeHtml(value)}</strong><span>${label}</span></article>`;
+}
+
+function renderQueueItem(item) {
+  const conversation = fensterConversations().find((thread) => thread.id === item.conversation_id);
+  return `
+    <article class="queue-item">
+      <div>
+        <strong>${escapeHtml(item.action || "Action")}</strong>
+        <span>${escapeHtml(conversation?.display_name || item.conversation_id || "")}</span>
+      </div>
+      <span class="pill status-${slug(item.status || "pending")}">${escapeHtml(item.status || "pending")}</span>
+      <time>${escapeHtml(item.not_before || item.created_at || "")}</time>
+    </article>
+  `;
 }
 
 function fensterConversations() {
@@ -862,6 +907,16 @@ async function fensterSeed() {
 
 async function fensterSync() {
   await fensterAction("/api/fenster/meta/sync", { method: "POST", body: {} }, "Syncing Facebook...");
+}
+
+async function fensterStartBot() {
+  if (!confirm("Start the bot? It will scan new messages, email office leads, and send approved-style replies after a 60 second delay.")) return;
+  await fensterAction("/api/fenster/bot/start", { method: "POST", body: {} }, "Starting bot...");
+}
+
+async function fensterStopBot() {
+  if (!confirm("Stop the bot? Pending queued replies will stay queued but will not send while stopped.")) return;
+  await fensterAction("/api/fenster/bot/stop", { method: "POST", body: {} }, "Stopping bot...");
 }
 
 async function fensterGenerate() {
@@ -1232,6 +1287,8 @@ window.dashboardTogglePlan = togglePlan;
 window.dashboardFensterRefresh = loadFenster;
 window.dashboardFensterSeed = fensterSeed;
 window.dashboardFensterSync = fensterSync;
+window.dashboardFensterStartBot = fensterStartBot;
+window.dashboardFensterStopBot = fensterStopBot;
 window.dashboardFensterTab = fensterSetTab;
 window.dashboardFensterSelect = fensterSelect;
 window.dashboardFensterGenerate = fensterGenerate;

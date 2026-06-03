@@ -705,6 +705,21 @@ function renderFenster() {
         ${queue.length ? queue.slice(0, 8).map(renderQueueItem).join("") : `<p class="empty">No queued bot actions yet.</p>`}
       </div>
     </div>
+    <div class="prompt-panel">
+      <div class="panel-header compact">
+        <div>
+          <h3>AI context</h3>
+          <p class="panel-subtitle">Saved rules are included with every bot decision.</p>
+        </div>
+      </div>
+      <label>
+        Extra prompt context
+        <textarea id="fenster-prompt-context">${escapeHtml(bot.promptContext || "")}</textarea>
+      </label>
+      <div class="actions">
+        <button onclick="window.dashboardFensterSavePrompt()">Save AI context</button>
+      </div>
+    </div>
     <div class="fenster-tabs">
       ${[
         ["awaiting", "Awaiting reply"],
@@ -917,6 +932,13 @@ async function fensterStartBot() {
 async function fensterStopBot() {
   if (!confirm("Stop the bot? Pending queued replies will stay queued but will not send while stopped.")) return;
   await fensterAction("/api/fenster/bot/stop", { method: "POST", body: {} }, "Stopping bot...");
+}
+
+async function fensterSavePrompt() {
+  await fensterAction("/api/fenster/bot/prompt", {
+    method: "POST",
+    body: { promptContext: $("#fenster-prompt-context")?.value || "" }
+  }, "Saving AI context...");
 }
 
 async function fensterGenerate() {
@@ -1289,6 +1311,7 @@ window.dashboardFensterSeed = fensterSeed;
 window.dashboardFensterSync = fensterSync;
 window.dashboardFensterStartBot = fensterStartBot;
 window.dashboardFensterStopBot = fensterStopBot;
+window.dashboardFensterSavePrompt = fensterSavePrompt;
 window.dashboardFensterTab = fensterSetTab;
 window.dashboardFensterSelect = fensterSelect;
 window.dashboardFensterGenerate = fensterGenerate;

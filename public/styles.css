@@ -685,7 +685,8 @@ textarea:focus {
 }
 
 .bot-control,
-.queue-panel {
+.queue-panel,
+.prompt-panel {
   border: 1px solid var(--line);
   background: #fff;
   border-radius: 8px;
@@ -731,6 +732,19 @@ textarea:focus {
 .queue-item time {
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+.prompt-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.prompt-panel textarea {
+  min-height: 150px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.86rem;
+  line-height: 1.45;
 }
 
 .metric {

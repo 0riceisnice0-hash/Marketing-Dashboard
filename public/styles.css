@@ -603,6 +603,46 @@ textarea:focus {
   color: var(--red);
 }
 
+.priority-actions {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.priority-actions button {
+  background: #f8fafb;
+}
+
+.guidelines-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.guideline {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px;
+}
+
+.guideline header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.guideline h4 {
+  margin: 0 0 8px;
+}
+
+.guideline p {
+  margin: 12px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;

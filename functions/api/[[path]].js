@@ -178,7 +178,7 @@ async function fenster(context, route, user) {
   if (request.method === "POST" && route === "meta/sync") return fensterSyncMeta(env);
   if (request.method === "POST" && route === "drafts/regenerate") return fensterRegenerateDrafts(env);
 
-  const draftMatch = route.match(/^conversations\/([^/]+)\/(draft|generate-draft|send|hide|reject)$/);
+  const draftMatch = route.match(/^conversations\/([^/]+)\/(draft|generate-draft|send|hide|reject|email-office)$/);
   if (draftMatch && request.method === "POST") {
     return fensterConversationAction(env, request, draftMatch[1], draftMatch[2], user);
   }
@@ -364,6 +364,24 @@ async function fensterConversationAction(env, request, id, action, user) {
       "UPDATE fenster_conversations SET draft = '', draft_status = ?, status = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     ).bind("sent", "replied", "Reply approved and sent.", id).run();
     await fensterEvent(env, "message.sent", { conversationId: id, by: user.name });
+    return json({ ok: true, result, conversation: await fensterConversation(env, id) });
+  }
+
+  if (action === "email-office") {
+    const decision = {
+      action: conversation.decision_action || "FLAG_HUMAN",
+      reply: conversation.draft || "",
+      internal_note: String(body.note || conversation.internal_note || "Manual office email requested from the dashboard.")
+    };
+    const result = await sendLeadEmail(env, conversation, decision, {
+      force: true,
+      eventPrefix: "lead.email_manual",
+      by: user.name,
+      subjectPrefix: "Manual office forward"
+    });
+    await env.DB.prepare(
+      "UPDATE fenster_conversations SET status = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind("human-review", "Conversation emailed to info@fensterglazing.com for office follow-up.", id).run();
     return json({ ok: true, result, conversation: await fensterConversation(env, id) });
   }
 
@@ -614,17 +632,28 @@ async function notifyLeadIfNeeded(env, conversation, decision) {
   if (conversation.lead_notified_at) return;
   if (!isLeadConversation(conversation, decision)) return;
 
+  try {
+    await sendLeadEmail(env, conversation, decision);
+  } catch {
+    // The event log records the failure; automatic draft processing should continue.
+  }
+}
+
+async function sendLeadEmail(env, conversation, decision, options = {}) {
   if (!env.LEAD_EMAIL_WEBHOOK_URL || !env.LEAD_EMAIL_WEBHOOK_SECRET) {
     await fensterEvent(env, "lead.email_missing", {
       conversationId: conversation.id,
+      by: options.by || "",
       internal_note: "Lead detected, but lead email Worker secrets are not configured."
     });
-    return;
+    throw new Error("Lead email Worker secrets are not configured.");
   }
 
   try {
-    const subject = leadEmailSubject(conversation);
-    const body = leadEmailBody(conversation, decision);
+    const subject = options.subjectPrefix
+      ? `${options.subjectPrefix} - ${leadEmailSubject(conversation)}`
+      : leadEmailSubject(conversation);
+    const body = leadEmailBody(conversation, decision, options.by);
     const response = await fetch(env.LEAD_EMAIL_WEBHOOK_URL, {
       method: "POST",
       headers: {
@@ -637,9 +666,21 @@ async function notifyLeadIfNeeded(env, conversation, decision) {
     await env.DB.prepare(
       "UPDATE fenster_conversations SET lead_notified_at = CURRENT_TIMESTAMP, internal_note = ? WHERE id = ?"
     ).bind("Lead email sent to info@fensterglazing.com.", conversation.id).run();
-    await fensterEvent(env, "lead.email_sent", { conversationId: conversation.id, subject });
+    await fensterEvent(env, options.eventPrefix || "lead.email_sent", {
+      conversationId: conversation.id,
+      subject,
+      by: options.by || "",
+      forced: Boolean(options.force)
+    });
+    return { subject };
   } catch (error) {
-    await fensterEvent(env, "lead.email_failed", { conversationId: conversation.id, message: error.message });
+    await fensterEvent(env, options.eventPrefix ? `${options.eventPrefix}_failed` : "lead.email_failed", {
+      conversationId: conversation.id,
+      message: error.message,
+      by: options.by || "",
+      forced: Boolean(options.force)
+    });
+    throw error;
   }
 }
 
@@ -661,14 +702,15 @@ function leadEmailSubject(conversation) {
   return `${channel} message lead - ${conversation.display_name || conversation.external_user_id || "new customer"}`;
 }
 
-function leadEmailBody(conversation, decision) {
+function leadEmailBody(conversation, decision, requestedBy = "") {
   const lines = [
-    "New social message lead detected.",
+    requestedBy ? "Social message forwarded manually from the dashboard." : "New social message lead detected.",
     "",
     `Channel: ${conversation.channel}`,
     `Customer: ${conversation.display_name || ""}`,
     `Conversation ID: ${conversation.id}`,
     `Dashboard: https://marketing-dashboard-1d0.pages.dev/`,
+    requestedBy ? `Requested by: ${requestedBy}` : "",
     "",
     "Office action:",
     "Please review this lead in the Marketing Dashboard and contact the customer directly. Once handled, reply/confirm in the dashboard rather than sending an automatic bot reply.",

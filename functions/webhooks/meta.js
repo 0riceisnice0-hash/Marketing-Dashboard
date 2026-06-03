@@ -42,6 +42,7 @@ async function receiveMetaWebhook(request, env) {
     const updated = await conversationWithMessages(env, conversation.id);
     const decision = await safeGenerateDecision(env, updated);
     await notifyLeadIfNeeded(env, updated, decision);
+    await queueBotDecisionIfActive(env, updated, decision, incoming.externalId);
     await env.DB.prepare(
       "UPDATE fenster_conversations SET status = ?, draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, hidden_until_message_id = '', hidden_at = '', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     ).bind(statusForDecision(decision), decision.reply, draftStatusForDecision(decision), decision.action, decision.internal_note, conversation.id).run();
@@ -145,7 +146,7 @@ async function generateDecision(env, conversation) {
       model: env.OPENAI_MODEL || "gpt-5.1",
       instructions: fensterInstructions(),
       input: [
-        ...(conversation.messages || []).slice(-12).map((message) => ({
+        ...(conversation.messages || []).map((message) => ({
           role: message.direction === "outbound" ? "assistant" : "user",
           content: message.text
         })),
@@ -289,13 +290,14 @@ async function notifyLeadIfNeeded(env, conversation, decision) {
   try {
     const subject = leadEmailSubject(conversation);
     const body = leadEmailBody(conversation, decision);
+    const html = leadEmailHtml(conversation, decision);
     const response = await fetch(env.LEAD_EMAIL_WEBHOOK_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${env.LEAD_EMAIL_WEBHOOK_SECRET}`
       },
-      body: JSON.stringify({ subject, body })
+      body: JSON.stringify({ subject, body, html })
     });
     if (!response.ok) throw new Error(`Lead email Worker returned ${response.status}: ${await response.text()}`);
     await env.DB.prepare(
@@ -304,6 +306,41 @@ async function notifyLeadIfNeeded(env, conversation, decision) {
     await recordEvent(env, "lead.email_sent", { conversationId: conversation.id, subject });
   } catch (error) {
     await recordEvent(env, "lead.email_failed", { conversationId: conversation.id, message: error.message });
+  }
+}
+
+async function isBotActive(env) {
+  const row = await env.DB.prepare("SELECT value FROM fenster_settings WHERE key = ?").bind("bot_active").first();
+  return row?.value === "true";
+}
+
+async function queueBotDecisionIfActive(env, conversation, decision, messageId = "") {
+  if (!(await isBotActive(env))) return;
+  const latest = latestInboundMessage(conversation);
+  const latestMessageId = messageId || latest?.external_id || latest?.id || "";
+  if (!latest || !latestMessageId) return;
+
+  if (decision.action === "REPLY" && decision.reply) {
+    const existing = await env.DB.prepare(
+      "SELECT id FROM fenster_bot_queue WHERE conversation_id = ? AND message_id = ? AND action = ? AND status IN ('pending', 'processing', 'sent')"
+    ).bind(conversation.id, latestMessageId, "SEND_REPLY").first();
+    if (existing) return;
+    const id = crypto.randomUUID();
+    const notBefore = sqlDate(Date.now() + 60 * 1000);
+    await env.DB.prepare(
+      "INSERT INTO fenster_bot_queue (id, conversation_id, message_id, action, status, reply, decision_action, internal_note, not_before) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(id, conversation.id, latestMessageId, "SEND_REPLY", "pending", decision.reply, decision.action, decision.internal_note || "", notBefore).run();
+    await recordEvent(env, "bot.reply_queued", { conversationId: conversation.id, queueId: id, notBefore });
+    return;
+  }
+
+  if (decision.action === "FLAG_HUMAN") {
+    await recordEvent(env, "bot.human_required", { conversationId: conversation.id, messageId: latestMessageId, reason: decision.internal_note || "" });
+    return;
+  }
+
+  if (decision.action === "NO_REPLY") {
+    await recordEvent(env, "bot.no_reply", { conversationId: conversation.id, messageId: latestMessageId, reason: decision.internal_note || "" });
   }
 }
 
@@ -352,6 +389,75 @@ function leadEmailBody(conversation, decision) {
   }
 
   return lines.join("\n");
+}
+
+function leadEmailHtml(conversation, decision) {
+  const latest = latestInboundMessage(conversation);
+  const dashboardUrl = "https://marketing-dashboard-1d0.pages.dev/";
+  const messengerUrl = "https://business.facebook.com/latest/inbox/all";
+  const bubbles = (conversation.messages || []).map((message) => {
+    const outbound = message.direction === "outbound";
+    return `
+      <tr>
+        <td align="${outbound ? "right" : "left"}" style="padding:6px 0;">
+          <table role="presentation" style="max-width:78%;border-collapse:collapse;${outbound ? "margin-left:auto;" : ""}">
+            <tr>
+              <td style="background:${outbound ? "#d9fdd3" : "#f1f3f4"};color:#102027;border-radius:14px;padding:10px 12px;font:15px/1.45 Arial,sans-serif;">
+                <div style="font-weight:700;font-size:12px;color:#52616b;margin-bottom:4px;">${escapeHtml(outbound ? "Fenster" : conversation.display_name || "Customer")}</div>
+                <div>${escapeHtml(message.text)}</div>
+                <div style="font-size:11px;color:#6b7780;margin-top:6px;">${escapeHtml(message.created_at || "")}</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  return `<!doctype html>
+<html><body style="margin:0;background:#eef2f5;padding:24px;font-family:Arial,sans-serif;color:#102027;">
+  <table role="presentation" width="100%" style="border-collapse:collapse;"><tr><td align="center">
+    <table role="presentation" width="100%" style="max-width:720px;border-collapse:collapse;background:#ffffff;border:1px solid #d9e1e7;border-radius:12px;overflow:hidden;">
+      <tr><td style="background:#0f5f7a;color:#ffffff;padding:22px 24px;">
+        <div style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;">Fenster Meta Bot</div>
+        <h1 style="margin:8px 0 0;font-size:24px;line-height:1.2;">New social lead needs attention</h1>
+        <p style="margin:8px 0 0;color:#d8edf4;font-size:15px;line-height:1.45;">The bot flagged this conversation for the office instead of sending an automatic reply.</p>
+      </td></tr>
+      <tr><td style="padding:22px 24px;">
+        <div style="border-left:4px solid #f4a62a;background:#fff8ea;border-radius:8px;padding:14px 16px;margin-bottom:18px;">
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#7a4a00;">Message that triggered this</div>
+          <p style="margin:8px 0 0;font-size:18px;line-height:1.45;">${escapeHtml(latest?.text || "No trigger message found.")}</p>
+        </div>
+        <div style="background:#f6f9fb;border:1px solid #dfe7ec;border-radius:10px;padding:14px 16px;margin-bottom:18px;">
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#52616b;">AI summary / reason</div>
+          <p style="margin:8px 0 0;font-size:15px;line-height:1.5;">${escapeHtml(decision.internal_note || "The bot decided this should be handled by the office.")}</p>
+          <p style="margin:8px 0 0;font-size:13px;color:#52616b;">Decision: <strong>${escapeHtml(decision.action || "")}</strong></p>
+        </div>
+        <table role="presentation" style="border-collapse:collapse;margin:0 0 20px;"><tr>
+          <td style="padding-right:10px;"><a href="${dashboardUrl}" style="display:inline-block;background:#0f5f7a;color:#ffffff;text-decoration:none;font-weight:700;border-radius:8px;padding:12px 16px;">Reply via dashboard</a></td>
+          <td><a href="${messengerUrl}" style="display:inline-block;background:#ffffff;color:#0f5f7a;text-decoration:none;font-weight:700;border:1px solid #b8ccd6;border-radius:8px;padding:11px 16px;">Open Messenger inbox</a></td>
+        </tr></table>
+        <h2 style="font-size:16px;margin:0 0 10px;">Conversation</h2>
+        <table role="presentation" width="100%" style="border-collapse:collapse;background:#ffffff;">${bubbles || `<tr><td style="color:#52616b;">No messages found.</td></tr>`}</table>
+        <p style="margin:20px 0 0;color:#6b7780;font-size:12px;">Conversation ID: ${escapeHtml(conversation.id)}. Reply either via the Marketing Dashboard or the normal Messenger inbox.</p>
+      </td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  })[char]);
+}
+
+function sqlDate(value = Date.now()) {
+  return new Date(value).toISOString().replace("T", " ").slice(0, 19);
 }
 
 async function recordEvent(env, type, detail = {}) {

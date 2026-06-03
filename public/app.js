@@ -1332,7 +1332,8 @@ function fieldForMetaKey(table, key) {
 }
 
 function fieldOptions(table, field) {
-  return (config[table]?.fields || []).find(([name]) => name === field)?.[3] || [];
+  const options = (config[table]?.fields || []).find(([name]) => name === field)?.[3];
+  return Array.isArray(options) ? options : [];
 }
 
 function actionButtons(item, table) {

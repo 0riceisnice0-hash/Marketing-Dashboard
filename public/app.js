@@ -7,7 +7,6 @@ const tabs = [
   { id: "ideas", label: "Ideas", icon: "I" },
   { id: "roadmap", label: "Roadmap", icon: "R" },
   { id: "website", label: "Website", icon: "W" },
-  { id: "content", label: "Content", icon: "C" },
   { id: "tools", label: "Tools", icon: "A" }
 ];
 
@@ -20,7 +19,6 @@ const viewCopy = {
   ideas: "A holding area for good ideas before they interrupt the actual work.",
   roadmap: "Today, this week, and later, without the noise.",
   website: "Website changes, launch notes, and visible progress for the team.",
-  content: "Photos, reviews, videos, showroom assets, and case study requests.",
   tools: "The future tool drawer for automations, Meta work, reports, and templates."
 };
 
@@ -123,7 +121,7 @@ const config = {
     fields: [
       ["title", "Plan item", "text"],
       ["owner", "Owner", "hidden", "currentUser"],
-      ["status", "Status", "select", ["Planned", "Doing", "Done", "Carry on tomorrow"]],
+      ["status", "Status", "select", ["Planned", "Doing", "Parked", "Done", "Carry on tomorrow"]],
       ["notes", "Notes / updates", "textarea"],
       ["updated_by", "Updated by", "hidden", "currentUser"]
     ]
@@ -158,7 +156,7 @@ const config = {
       ["section", "Section", "select", ["Immediate Actions", "Website, Residential Foundation & SEO", "Social Media", "Print, Sales & Showroom", "AdminBase, Messaging & Long-Term Touchpoints", "Custom"]],
       ["effort", "Effort", "select", ["easy", "medium", "complex"]],
       ["detail", "Detail", "textarea"],
-      ["status", "Status", "hidden", "Active"]
+      ["status", "Status", "select", ["Active", "Parked", "Done"]]
     ]
   },
   content_requests: {
@@ -179,7 +177,7 @@ const config = {
     fields: [
       ["title", "Title", "text"],
       ["area", "Area", "select", ["Homepage", "Product page", "Gallery", "SEO", "Forms", "Tracking", "Changelog"]],
-      ["status", "Status", "select", ["Planned", "In Progress", "Live", "Blocked"]],
+      ["status", "Status", "select", ["Plan", "Active", "Parked", "Done"]],
       ["release_date", "Release date", "date"],
       ["detail", "Detail", "textarea"]
     ]
@@ -273,7 +271,7 @@ async function loadApp() {
   $("#app").hidden = false;
   window.scrollTo({ top: 0, behavior: "instant" });
   $("#active-user").textContent = `${user.name} - ${user.role}`;
-  state = await api("/api/bootstrap");
+  state = normalizeState(await api("/api/bootstrap"));
   captureSeenItems();
   await enableNotifications();
   startAutoRefresh();
@@ -288,7 +286,7 @@ function startAutoRefresh() {
 async function refreshDashboard() {
   if ($("#modal")?.open || $("#notes-modal")?.open) return;
   try {
-    const next = await api("/api/bootstrap");
+    const next = normalizeState(await api("/api/bootstrap"));
     notifyNewItems(next);
     state = next;
     if (current === "tools") {
@@ -373,11 +371,26 @@ function render() {
     ideas: () => renderBoard("ideas", "status", ["Inbox", "Considering", "Approved", "Parked", "Done"]),
     roadmap: renderRoadmap,
     website: renderWebsite,
-    content: () => renderBoard("content_requests", "status", ["Needed", "Requested", "Received", "Used"]),
     tools: renderTools
   };
 
   renderers[current]();
+  wireBoardDragDrop();
+}
+
+function normalizeState(next) {
+  return {
+    ...next,
+    website_updates: (next.website_updates || []).map((item) => ({
+      ...item,
+      status: {
+        Planned: "Plan",
+        "In Progress": "Active",
+        Blocked: "Parked",
+        Live: "Done"
+      }[item.status] || item.status
+    }))
+  };
 }
 
 function renderTodaysPlan() {
@@ -388,23 +401,26 @@ function renderSocial() {
   const guidelines = state.social_guidelines || [];
   view.innerHTML = `
     <div class="board-tools">
-      <p><strong>Social media guidelines</strong><br>Keep house style, templates, do/don't rules, and content ideas in one place.</p>
+      <p><strong>Social media planner</strong><br>Drag posts through the workflow. Keep guidelines underneath as reference notes, not mixed into ideas.</p>
       <div class="board-actions">
-        <button onclick="window.dashboardOpen('social_guidelines')">New guideline</button>
         <button class="primary-button" onclick="window.dashboardOpen('social_posts')">New social post</button>
       </div>
     </div>
-    <section class="guidelines-panel">
-      ${guidelines.length ? guidelines.map(renderGuideline).join("") : `<p class="empty">No guidelines yet. Add brand voice notes, caption templates, or posting rules here.</p>`}
-    </section>
-    <div class="grid columns" style="margin-top:16px">
+    <div class="grid columns">
       ${["Idea", "Planned", "Scheduled", "Posted", "Parked"].map((group) => `
-        <section class="column">
+        <section class="column" data-table="social_posts" data-field="status" data-value="${escapeHtml(group)}">
           ${columnHeader(group, (state.social_posts || []).filter((item) => item.status === group).length)}
           <div class="card-list">${cards((state.social_posts || []).filter((item) => item.status === group), "social_posts")}</div>
         </section>
       `).join("")}
     </div>
+    <div class="section-tools">
+      <h3>Social guidelines</h3>
+      <button onclick="window.dashboardOpen('social_guidelines')">New guideline</button>
+    </div>
+    <section class="guidelines-panel">
+      ${guidelines.length ? guidelines.map(renderGuideline).join("") : `<p class="empty">No guidelines yet. Add brand voice notes, caption templates, or posting rules here.</p>`}
+    </section>
   `;
 }
 
@@ -416,6 +432,7 @@ function renderGuideline(item) {
           <h4>${escapeHtml(item.title)}</h4>
           <span class="pill">${escapeHtml(item.category || "General")}</span>
         </div>
+        <button class="note-button" onclick="window.dashboardOpenNotes('social_guidelines', ${item.id})">${noteBadge("social_guidelines", item.id)}</button>
         <button class="danger-action" onclick="window.dashboardDeleteRecord('social_guidelines', ${item.id})">Delete</button>
       </header>
       <p>${escapeHtml(item.body || "")}</p>
@@ -426,15 +443,15 @@ function renderGuideline(item) {
 function renderActionPlan() {
   const allItems = flattenedActionPlan();
   const visible = actionPlanFilter === "all" ? allItems : allItems.filter((item) => item.effort === actionPlanFilter);
-  const done = allItems.filter((item) => localStorage.getItem(actionPlanKey(item)) === "done").length;
+  const done = allItems.filter((item) => item.status === "Done").length;
   const percent = allItems.length ? Math.round((done / allItems.length) * 100) : 0;
 
   view.innerHTML = `
     <div class="action-hero">
       <div>
         <p class="eyebrow">Fenster marketing action plan</p>
-        <h3>Version 2 · ${percent}% complete</h3>
-        <p>Add your own actions, park/remove what no longer matters, or turn any item into a roadmap task.</p>
+        <h3>Version 2 - ${percent}% complete</h3>
+        <p>Drag work between active, parked, and done. Changes are saved to the shared Cloudflare database.</p>
       </div>
       <div class="progress-card">
         <div class="bar"><span style="width:${percent}%"></span></div>
@@ -451,54 +468,30 @@ function renderActionPlan() {
       ${stat("Bigger projects", allItems.filter((item) => item.effort === "complex").length, "Systems or rollout work", "#c23a34")}
       ${stat("Visible now", visible.length, "Current filtered list", "#215ed3")}
     </div>
-    <div class="plan-sections">
-      ${actionPlanSections().map((section) => renderPlanSection(section)).join("")}
+    <div class="grid columns action-columns">
+      ${["Active", "Parked", "Done"].map((status) => `
+        <section class="column" data-table="action_plan_items" data-field="status" data-value="${status}">
+          ${columnHeader(status, visible.filter((item) => item.status === status).length)}
+          <div class="card-list">${visible.filter((item) => item.status === status).map(renderPlanItem).join("") || `<p class="empty">Nothing here.</p>`}</div>
+        </section>
+      `).join("")}
     </div>
   `;
 }
 
-function renderPlanSection(section) {
-  const items = section.items
-    .map((entry) => Array.isArray(entry)
-      ? { section: section.section, title: entry[0], detail: entry[1], effort: entry[2] || section.effort, customId: null }
-      : entry)
-    .filter((item) => !isActionPlanHidden(item))
-    .filter((item) => actionPlanFilter === "all" || item.effort === actionPlanFilter);
-
-  if (!items.length) return "";
-
-  return `
-    <section class="plan-section">
-      <div class="panel-header">
-        <div>
-          <h3>${section.section}</h3>
-          <p class="panel-subtitle">${items.length} visible task${items.length === 1 ? "" : "s"}</p>
-        </div>
-        <span class="pill status-${section.effort}">${effortLabel(section.effort)}</span>
-      </div>
-      <div class="plan-items">
-        ${items.map((item) => renderPlanItem(item)).join("")}
-      </div>
-    </section>
-  `;
-}
-
 function renderPlanItem(item) {
-  const key = actionPlanKey(item);
-  const checked = localStorage.getItem(key) === "done";
   return `
-    <article class="plan-item ${checked ? "is-done" : ""}">
-      <label class="checkline">
-        <input type="checkbox" ${checked ? "checked" : ""} onchange="window.dashboardTogglePlan('${key}', this.checked)">
-        <span>
-          <strong>${escapeHtml(item.title)}</strong>
-          <small class="pill status-${item.effort}">${effortLabel(item.effort)}</small>
-        </span>
-      </label>
+    <article class="card plan-item ${item.status === "Done" ? "is-done" : ""}" draggable="true" data-table="action_plan_items" data-id="${item.customId || ""}" data-action-key="${escapeHtml(actionPlanKey(item))}">
+      <header><h4>${escapeHtml(item.title)}</h4><span class="pill status-${item.effort}">${effortLabel(item.effort)}</span></header>
       <p>${escapeHtml(item.detail)}</p>
+      <div class="meta">
+        ${editableChip("action_plan_items", item, "status", "Status", item.status || "Active")}
+        <span class="pill"><span class="meta-label">Section</span>${escapeHtml(item.section)}</span>
+      </div>
       <div class="actions">
         <button onclick="window.dashboardActionToTask('${encodeActionItem(item)}')">Set as task</button>
-        <button class="danger-action" onclick="window.dashboardDeleteActionItem('${encodeActionItem(item)}')">Delete</button>
+        <button class="note-button" onclick="window.dashboardOpenNotes('action_plan_items', ${item.customId || 0}, '${encodeActionItem(item)}')">${noteBadge("action_plan_items", item.customId)}</button>
+        <details class="card-menu"><summary aria-label="More actions">...</summary><button class="danger-action" onclick="window.dashboardDeleteActionItem('${encodeActionItem(item)}')">Delete</button></details>
       </div>
     </article>
   `;
@@ -510,26 +503,33 @@ function flattenedActionPlan() {
     title: entry[0],
     detail: entry[1],
     effort: entry[2] || section.effort,
+    status: "Active",
     customId: null
-  } : entry)).filter((item) => !isActionPlanHidden(item));
+  } : entry)).filter((item) => item.status !== "Deleted");
 }
 
 function actionPlanSections() {
   const sections = actionPlan.map((section) => ({ ...section, items: [...section.items] }));
   for (const item of state.action_plan_items || []) {
-    if (item.status === "Deleted") continue;
     let target = sections.find((section) => section.section === item.section);
     if (!target) {
       target = { section: item.section || "Custom", effort: item.effort || "medium", items: [] };
       sections.push(target);
     }
-    target.items.push({
+    const record = {
       section: item.section || "Custom",
       title: item.title,
       detail: item.detail || "",
       effort: item.effort || "medium",
+      status: item.status || "Active",
       customId: item.id
+    };
+    const existingIndex = target.items.findIndex((entry) => {
+      const title = Array.isArray(entry) ? entry[0] : entry.title;
+      return slug(title) === slug(record.title);
     });
+    if (existingIndex >= 0) target.items[existingIndex] = record;
+    else target.items.push(record);
   }
   return sections;
 }
@@ -552,10 +552,9 @@ function filterPlan(filter) {
   render();
 }
 
-function togglePlan(key, done) {
-  if (done) localStorage.setItem(key, "done");
-  else localStorage.removeItem(key);
-  render();
+async function togglePlan(encoded, done) {
+  const item = decodeActionItem(encoded);
+  await patchActionPlanItem(item, { status: done ? "Done" : "Active" });
 }
 
 function encodeActionItem(item) {
@@ -567,19 +566,13 @@ function decodeActionItem(encoded) {
 }
 
 function isActionPlanHidden(item) {
-  return !item.customId && localStorage.getItem(`action-plan-hidden:${actionPlanKey(item)}`) === "1";
+  return item.status === "Deleted";
 }
 
 async function deleteActionItem(encoded) {
   const item = decodeActionItem(encoded);
   if (!confirm(`Delete action: ${item.title}?`)) return;
-  if (item.customId) {
-    await api("/api/records/action_plan_items", { method: "PATCH", body: { id: item.customId, status: "Deleted" } });
-    state.action_plan_items = (state.action_plan_items || []).map((entry) => entry.id === item.customId ? { ...entry, status: "Deleted" } : entry);
-  } else {
-    localStorage.setItem(`action-plan-hidden:${actionPlanKey(item)}`, "1");
-  }
-  render();
+  await patchActionPlanItem(item, { status: "Deleted" });
 }
 
 async function actionItemToTask(encoded) {
@@ -592,12 +585,33 @@ async function actionItemToTask(encoded) {
   alert("Added to Roadmap as a task.");
 }
 
+async function patchActionPlanItem(item, patch, options = {}) {
+  let saved;
+  if (item.customId) {
+    saved = await api("/api/records/action_plan_items", { method: "PATCH", body: { id: item.customId, ...patch } });
+    state.action_plan_items = (state.action_plan_items || []).map((entry) => entry.id === item.customId ? saved : entry);
+  } else {
+    saved = await api("/api/records/action_plan_items", {
+      method: "POST",
+      body: {
+        title: item.title,
+        section: item.section || "Custom",
+        effort: item.effort || "medium",
+        detail: item.detail || "",
+        status: patch.status || "Active"
+      }
+    });
+    state.action_plan_items = [saved, ...(state.action_plan_items || [])];
+  }
+  if (!options.silent) render();
+  return saved;
+}
+
 function renderDashboard() {
   const openTickets = (state.tickets || []).filter((item) => !["Done", "Parked"].includes(item.status));
   const closedTickets = (state.tickets || []).filter((item) => item.status === "Done");
   const parkedTickets = (state.tickets || []).filter((item) => item.status === "Parked");
   const urgent = openTickets.filter((item) => ["Urgent", "Boss panic mode"].includes(item.priority));
-  const contentNeeded = (state.content_requests || []).filter((item) => item.status !== "Used");
   const websiteProgress = (state.website_updates || []).length;
   const waiting = openTickets.filter((ticket) => ticket.status === "Waiting on Someone");
   const today = (state.tasks || []).filter((task) => task.lane === "Today" && !Number(task.done));
@@ -632,11 +646,11 @@ function renderDashboard() {
     <div class="grid two" style="margin-top:16px">
       <section class="panel">
         ${panelHeader("Website progress", "Dev site updates and current website movement.", websiteProgress)}
-        <div class="card-list">${cards((state.website_updates || []).filter((item) => item.status !== "Live").slice(0, 5), "website_updates")}</div>
+        <div class="card-list">${cards((state.website_updates || []).filter((item) => item.status !== "Done").slice(0, 5), "website_updates")}</div>
       </section>
       <section class="panel">
-        ${panelHeader("Content asks", "Photos, reviews, videos, and assets still being chased.", contentNeeded.length)}
-        <div class="card-list dashboard-list">${cards(contentNeeded.slice(0, 6), "content_requests")}</div>
+        ${panelHeader("Social queue", "Content ideas and posts that still need movement.", (state.social_posts || []).filter((item) => item.status !== "Posted").length)}
+        <div class="card-list dashboard-list">${cards((state.social_posts || []).filter((item) => item.status !== "Posted").slice(0, 6), "social_posts")}</div>
       </section>
     </div>
   `;
@@ -656,7 +670,7 @@ function renderBoard(table, groupKey, groups) {
     ${table === "tickets" ? `<p class="result-note">Showing ${allItems.length} of ${totalItems} tickets.</p>` : ""}
     <div class="grid columns">
       ${groups.map((group) => `
-        <section class="column">
+        <section class="column" data-table="${table}" data-field="${groupKey}" data-value="${escapeHtml(group)}">
           ${columnHeader(group, allItems.filter((item) => item[groupKey] === group).length)}
           <div class="card-list">${cards(allItems.filter((item) => item[groupKey] === group), table)}</div>
         </section>
@@ -684,6 +698,56 @@ function searchTickets(value) {
   render();
 }
 
+function wireBoardDragDrop() {
+  view.querySelectorAll(".card[draggable='true']").forEach((card) => {
+    card.addEventListener("dragstart", (event) => {
+      if (event.target.closest("button, select, details, summary, label")) {
+        event.preventDefault();
+        return;
+      }
+      card.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/json", JSON.stringify({
+        table: card.dataset.table,
+        id: card.dataset.id,
+        actionKey: card.dataset.actionKey || ""
+      }));
+    });
+    card.addEventListener("dragend", () => card.classList.remove("dragging"));
+  });
+
+  view.querySelectorAll(".column[data-table]").forEach((column) => {
+    column.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      column.classList.add("drag-over");
+      event.dataTransfer.dropEffect = "move";
+    });
+    column.addEventListener("dragleave", (event) => {
+      if (!column.contains(event.relatedTarget)) column.classList.remove("drag-over");
+    });
+    column.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      column.classList.remove("drag-over");
+      const payload = JSON.parse(event.dataTransfer.getData("application/json") || "{}");
+      if (payload.table !== column.dataset.table) return;
+      await patchBoardItem(payload, column.dataset.field, column.dataset.value);
+    });
+  });
+}
+
+async function patchBoardItem(payload, field, value) {
+  if (payload.table === "action_plan_items") {
+    const item = flattenedActionPlan().find((entry) => actionPlanKey(entry) === payload.actionKey);
+    if (!item || item.status === value) return;
+    await patchActionPlanItem(item, { [field]: value });
+    return;
+  }
+  const id = Number(payload.id);
+  const item = (state[payload.table] || []).find((entry) => entry.id === id);
+  if (!id || !item || item[field] === value) return;
+  await patchRecord(payload.table, id, { [field]: value });
+}
+
 function renderRoadmap() {
   const tasks = state.tasks || [];
   view.innerHTML = `
@@ -703,26 +767,20 @@ function renderRoadmap() {
 }
 
 function renderWebsite() {
-  const live = (state.website_updates || []).filter((item) => item.status === "Live");
-  const active = (state.website_updates || []).filter((item) => item.status !== "Live");
   view.innerHTML = `
     <div class="board-tools">
-      <p><strong>Website workbench</strong><br>Track progress on the dev site: copy, SEO, products, forms, launches, and fixes.</p>
+      <p><strong>Website workbench</strong><br>Plan changes, move active work forward, park anything blocked, then mark it done.</p>
       <div class="actions" style="margin-top:0">
-        <button onclick="window.dashboardOpen('website_updates')">New website update</button>
+        <button class="primary-button" onclick="window.dashboardOpen('website_updates')">New website update</button>
       </div>
     </div>
-    <div class="grid two">
-      <section class="panel">
-        ${panelHeader("Active site work", "Work that is planned, blocked, or being built.", active.length)}
-        <div class="card-list">${cards(active, "website_updates")}</div>
-      </section>
-      <section class="panel">
-        ${panelHeader("Progress made", "Website updates currently recorded.", live.length)}
-        <div class="card-list">
-          ${cards(live, "website_updates")}
-        </div>
-      </section>
+    <div class="grid columns">
+      ${["Plan", "Active", "Parked", "Done"].map((status) => `
+        <section class="column" data-table="website_updates" data-field="status" data-value="${status}">
+          ${columnHeader(status, (state.website_updates || []).filter((item) => item.status === status).length)}
+          <div class="card-list">${cards((state.website_updates || []).filter((item) => item.status === status), "website_updates")}</div>
+        </section>
+      `).join("")}
     </div>
   `;
 }
@@ -1166,7 +1224,7 @@ function columnHeader(title, count) {
 
 function boardHint(table) {
   const hints = {
-    tickets: "Move requests across the board as they progress. The action buttons are workflow moves.",
+    tickets: "Drag requests between columns. Click priority, owner, or type on the card to change it.",
     todays_plan: "Anyone can add the day's plan, add notes, mark it done, or carry it forward tomorrow.",
     social_posts: "Plan social ideas, draft captions, schedule content, and keep posted work visible.",
     ideas: "Capture ideas here, then decide whether they become real work.",
@@ -1183,11 +1241,11 @@ function cards(items, table) {
 function card(item, table) {
   const detail = item.detail ? `<p>${escapeHtml(item.detail)}</p>` : "";
   const chips = metaFor(item, table)
-    .map(([label, value, key]) => `<span class="pill ${key}-${slug(value)}"><span class="meta-label">${label}</span>${escapeHtml(value)}</span>`)
+    .map(([label, value, key]) => editableChip(table, item, key, label, value))
     .join("");
   const actions = actionButtons(item, table);
   return `
-    <article class="card">
+    <article class="card" draggable="true" data-table="${table}" data-id="${item.id}">
       <header><h4>${escapeHtml(item.title || "Untitled")}</h4><span class="pill id">#${item.id}</span></header>
       ${detail}
       <div class="meta">${chips}</div>
@@ -1199,6 +1257,7 @@ function card(item, table) {
 function metaFor(item, table) {
   const maps = {
     tickets: [
+      ["Status", item.status, "status"],
       ["Priority", item.priority, "priority"],
       ["From", item.requester, "requester"],
       ["Type", item.category, "category"]
@@ -1219,11 +1278,13 @@ function metaFor(item, table) {
       ["Updated by", item.updated_by, "author"]
     ],
     social_posts: [
+      ["Status", item.status, "status"],
       ["Platform", item.platform, "platform"],
       ["Type", item.content_type, "asset_type"],
       ["Scheduled", item.scheduled_for, "deadline"]
     ],
     content_requests: [
+      ["Status", item.status, "status"],
       ["Asset", item.asset_type, "asset_type"],
       ["From", item.requester, "requester"],
       ["Deadline", item.deadline, "deadline"]
@@ -1243,56 +1304,61 @@ function metaFor(item, table) {
     .map(([label, value, key]) => [label, value, key]);
 }
 
-function actionButtons(item, table) {
-  if (table === "tasks") {
-    return `<div class="actions"><button onclick="window.dashboardPatch('${table}', ${item.id}, {done: 1})">Done</button></div>`;
+function editableChip(table, item, key, label, value) {
+  const field = fieldForMetaKey(table, key);
+  const options = fieldOptions(table, field);
+  const id = item.id || item.customId;
+  if (!options.length || !id) {
+    return `<span class="pill ${key}-${slug(value)}"><span class="meta-label">${label}</span>${escapeHtml(value)}</span>`;
   }
-  if (table === "todays_plan") {
-    return `
-      ${workflowButtons(table, item, "status", ["Doing", "Done", "Parked", "Carry on tomorrow", "Planned"])}
-      <div class="actions"><button class="danger-action" onclick="window.dashboardDeleteRecord('${table}', ${item.id})">Delete</button></div>
-    `;
-  }
-  if (table === "social_posts") {
-    return workflowButtons(table, item, "status", ["Planned", "Scheduled", "Posted", "Parked", "Idea"]);
-  }
-  if (table === "ideas") {
-    return {
-      author: user.name,
-      status: "Inbox",
-      ...body
-    };
-  }
-  if (table === "ideas") {
-    return workflowButtons(table, item, "status", ["Considering", "Approved", "Parked", "Done", "Inbox"]);
-  }
-  if (table === "tickets") {
-    return `
-      ${workflowButtons(table, item, "status", ["In Progress", "Waiting on Someone", "Parked", "Done", "New"])}
-      <div class="actions priority-actions">
-        ${["Low", "Normal", "Urgent", "Boss panic mode"].filter((priority) => item.priority !== priority).map((priority) => `<button onclick="window.dashboardPatch('${table}', ${item.id}, {priority: '${priority}'})">Priority: ${priority}</button>`).join("")}
-      </div>
-      <div class="actions">
-        <button onclick="window.dashboardOpenNotes(${item.id})">Notes</button>
-        <button class="danger-action" onclick="window.dashboardDeleteTicket(${item.id})">Delete</button>
-      </div>
-    `;
-  }
-  if (table === "content_requests") {
-    return workflowButtons(table, item, "status", ["Requested", "Received", "Used"]);
-  }
-  if (table === "website_updates") {
-    return workflowButtons(table, item, "status", ["In Progress", "Live", "Blocked"]);
-  }
-  return "";
+  return `
+    <label class="pill inline-select ${key}-${slug(value)}">
+      <span class="meta-label">${label}</span>
+      <select onchange="window.dashboardPatch('${table}', ${id}, {${field}: this.value})" onclick="event.stopPropagation()">
+        ${options.map((option) => `<option value="${escapeHtml(option)}" ${option === value ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+      </select>
+    </label>
+  `;
 }
 
-function workflowButtons(table, item, field, values) {
-  const buttons = values
-    .filter((value) => item[field] !== value)
-    .map((value) => `<button onclick="window.dashboardPatch('${table}', ${item.id}, {${field}: '${value}'})">Move to ${value}</button>`)
-    .join("");
-  return buttons ? `<div class="actions">${buttons}</div>` : "";
+function fieldForMetaKey(table, key) {
+  const aliases = {
+    asset_type: table === "social_posts" ? "content_type" : "asset_type",
+    requester: table === "tickets" ? "requester" : "requester",
+    author: table === "ideas" ? "author" : "updated_by",
+    deadline: table === "social_posts" ? "scheduled_for" : "deadline"
+  };
+  return aliases[key] || key;
+}
+
+function fieldOptions(table, field) {
+  return (config[table]?.fields || []).find(([name]) => name === field)?.[3] || [];
+}
+
+function actionButtons(item, table) {
+  if (table === "tasks") {
+    return `<div class="actions"><button onclick="window.dashboardPatch('${table}', ${item.id}, {done: 1})">Done</button>${noteAction(table, item)}${deleteMenu(table, item)}</div>`;
+  }
+  if (table === "tickets") {
+    return `<div class="actions">${noteAction(table, item)}${deleteMenu(table, item, "window.dashboardDeleteTicket")}</div>`;
+  }
+  return `<div class="actions">${noteAction(table, item)}${deleteMenu(table, item)}</div>`;
+}
+
+function noteAction(table, item) {
+  return `<button class="note-button" onclick="window.dashboardOpenNotes('${table}', ${item.id})">${noteBadge(table, item.id)}</button>`;
+}
+
+function noteBadge(table, id) {
+  const count = state.note_counts?.[`${table}:${id}`] || 0;
+  return `<span class="note-mark ${count ? "has-notes" : ""}" aria-hidden="true">📝</span><span>${count ? `${count} note${count === 1 ? "" : "s"}` : "Notes"}</span>`;
+}
+
+function deleteMenu(table, item, fn = "window.dashboardDeleteRecord") {
+  const call = fn === "window.dashboardDeleteTicket"
+    ? `${fn}(${item.id})`
+    : `${fn}('${table}', ${item.id})`;
+  return `<details class="card-menu"><summary aria-label="More actions">...</summary><button class="danger-action" onclick="${call}">Delete</button></details>`;
 }
 
 function openModal(table) {
@@ -1355,6 +1421,13 @@ function withDefaults(table, body) {
       ...body
     };
   }
+  if (table === "ideas") {
+    return {
+      author: user.name,
+      status: "Inbox",
+      ...body
+    };
+  }
   if (table === "action_plan_items") {
     return {
       section: "Custom",
@@ -1397,19 +1470,29 @@ async function deleteRecord(table, id) {
   render();
 }
 
-async function openNotes(ticketId) {
-  const ticket = (state.tickets || []).find((item) => item.id === ticketId);
-  if (!ticket) return;
-  notesModal.dataset.ticketId = String(ticketId);
-  $("#notes-title").textContent = ticket.title || "Ticket notes";
-  $("#notes-subtitle").textContent = `From ${ticket.requester || "the team"} - ${ticket.status || "New"} - ${ticket.priority || "Normal"}`;
+async function openNotes(table, id, encodedAction = "") {
+  let item = (state[table] || []).find((entry) => entry.id === id);
+  if (!item && table === "action_plan_items" && encodedAction) {
+    item = await patchActionPlanItem(decodeActionItem(encodedAction), { status: decodeActionItem(encodedAction).status || "Active" }, { silent: true });
+    id = item.id;
+  }
+  if (!item) return;
+  notesModal.dataset.table = table;
+  notesModal.dataset.id = String(id);
+  $("#notes-title").textContent = item.title || `${config[table]?.title || "Item"} notes`;
+  $("#notes-subtitle").textContent = noteSubtitle(table, item);
   $("#note-body").value = "";
-  await renderNotes(ticketId);
+  await renderNotes(table, id);
   notesModal.showModal();
 }
 
-async function renderNotes(ticketId) {
-  const notes = await api(`/api/notes/tickets/${ticketId}`);
+function noteSubtitle(table, item) {
+  return metaFor(item, table).map(([label, value]) => `${label}: ${value}`).join(" - ");
+}
+
+async function renderNotes(table, id) {
+  const notes = await api(`/api/notes/${table}/${id}`);
+  state.note_counts = { ...(state.note_counts || {}), [`${table}:${id}`]: notes.length };
   $("#notes-list").innerHTML = notes.length
     ? notes.map((note) => `
       <article class="note">
@@ -1422,12 +1505,14 @@ async function renderNotes(ticketId) {
 
 async function saveNote(event) {
   event.preventDefault();
-  const ticketId = Number(notesModal.dataset.ticketId);
+  const table = notesModal.dataset.table;
+  const id = Number(notesModal.dataset.id);
   const body = $("#note-body").value.trim();
-  if (!ticketId || !body) return;
-  await api(`/api/notes/tickets/${ticketId}`, { method: "POST", body: { body } });
+  if (!table || !id || !body) return;
+  await api(`/api/notes/${table}/${id}`, { method: "POST", body: { body } });
   $("#note-body").value = "";
-  await renderNotes(ticketId);
+  await renderNotes(table, id);
+  render();
 }
 
 async function api(path, options = {}) {

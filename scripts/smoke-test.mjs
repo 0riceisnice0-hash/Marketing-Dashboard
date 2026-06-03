@@ -252,6 +252,18 @@ async function call(path, init = {}) {
 
 function queryAll({ sql, values }) {
   const table = tableFrom(sql);
+  if (sql.includes("COUNT(*) AS count")) {
+    const grouped = new Map();
+    for (const note of tables.notes) {
+      const key = `${note.parent_type}:${note.parent_id}`;
+      grouped.set(key, {
+        parent_type: note.parent_type,
+        parent_id: note.parent_id,
+        count: (grouped.get(key)?.count || 0) + 1
+      });
+    }
+    return { results: [...grouped.values()] };
+  }
   if (sql.includes("WHERE parent_type")) {
     const [parentType, parentId] = values;
     return { results: tables.notes.filter((note) => note.parent_type === parentType && note.parent_id === parentId) };

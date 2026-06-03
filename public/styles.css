@@ -452,6 +452,15 @@ textarea:focus {
   transform: translateY(-1px);
 }
 
+.card[draggable="true"] {
+  cursor: grab;
+}
+
+.card.dragging {
+  opacity: 0.55;
+  transform: rotate(1deg);
+}
+
 .card header {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -495,6 +504,22 @@ textarea:focus {
   color: var(--muted);
 }
 
+.inline-select {
+  padding-right: 4px;
+}
+
+.inline-select select {
+  max-width: 138px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 900;
+  outline: 0;
+  cursor: pointer;
+}
+
 .pill.id {
   background: #101827;
   color: #fff;
@@ -519,6 +544,8 @@ textarea:focus {
 
 .pill.status-in-progress,
 .pill.status-planned,
+.pill.status-plan,
+.pill.status-active,
 .pill.status-this-week,
 .pill.status-considering,
 .pill.status-requested,
@@ -572,6 +599,7 @@ textarea:focus {
 .actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 12px;
 }
@@ -610,6 +638,79 @@ textarea:focus {
 
 .priority-actions button {
   background: #f8fafb;
+}
+
+.note-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.note-mark {
+  filter: grayscale(1);
+  opacity: 0.58;
+}
+
+.note-mark.has-notes {
+  filter: none;
+  opacity: 1;
+}
+
+.card-menu {
+  position: relative;
+}
+
+.card-menu summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 900;
+  list-style: none;
+  cursor: pointer;
+}
+
+.card-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.card-menu[open] summary {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.card-menu[open] button {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  min-width: 112px;
+  box-shadow: var(--shadow-small);
+}
+
+.column.drag-over {
+  outline: 2px solid var(--blue);
+  outline-offset: -4px;
+  background: #f4f8ff;
+}
+
+.section-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0 10px;
+}
+
+.section-tools h3 {
+  margin: 0;
+  font-size: 1rem;
 }
 
 .guidelines-panel {

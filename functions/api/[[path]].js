@@ -73,6 +73,7 @@ async function bootstrap(env) {
   for (const table of Object.keys(TABLES)) {
     data[table] = await selectAll(env, table);
   }
+  data.note_counts = await noteCounts(env);
   return json(data);
 }
 
@@ -116,9 +117,7 @@ async function records(context, table) {
     const body = await request.json();
     const id = Number(body.id);
     if (!id) return json({ error: "An id is required" }, 400);
-    if (table === "tickets") {
-      await env.DB.prepare("DELETE FROM notes WHERE parent_type = ? AND parent_id = ?").bind(table, id).run();
-    }
+    await env.DB.prepare("DELETE FROM notes WHERE parent_type = ? AND parent_id = ?").bind(table, id).run();
     await env.DB.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(id).run();
     return json({ ok: true, id });
   }
@@ -160,6 +159,17 @@ async function selectAll(env, table) {
 async function selectOne(env, table, id) {
   const row = await env.DB.prepare(`SELECT * FROM ${table} WHERE id = ?`).bind(id).first();
   return row || null;
+}
+
+async function noteCounts(env) {
+  const rows = await env.DB.prepare(
+    "SELECT parent_type, parent_id, COUNT(*) AS count FROM notes GROUP BY parent_type, parent_id"
+  ).all();
+  const counts = {};
+  for (const row of rows.results || []) {
+    counts[`${row.parent_type}:${row.parent_id}`] = row.count;
+  }
+  return counts;
 }
 
 function sanitize(body, allowed) {

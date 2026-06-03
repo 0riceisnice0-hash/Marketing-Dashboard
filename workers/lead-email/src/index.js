@@ -10,6 +10,7 @@ export default {
       const body = await request.json().catch(() => ({}));
       const subject = cleanSubject(body.subject || "Facebook message lead");
       const content = String(body.body || "").trim();
+      const html = String(body.html || "").trim();
       if (!content) return json({ error: "Missing email body" }, 400);
       if (!env.RESEND_API_KEY) return json({ error: "Missing Resend API key" }, 500);
 
@@ -20,7 +21,8 @@ export default {
         from,
         to,
         subject,
-        content
+        content,
+        html
       );
       return json({ ok: true, id: result.id || null });
     } catch (error) {
@@ -38,7 +40,7 @@ function cleanAddress(value) {
   return String(value).replace(/[\r\n<>]+/g, "").trim();
 }
 
-async function sendWithResend(apiKey, from, to, subject, text) {
+async function sendWithResend(apiKey, from, to, subject, text, html = "") {
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -50,7 +52,7 @@ async function sendWithResend(apiKey, from, to, subject, text) {
       to: [to],
       subject,
       text,
-      html: `<pre style="font-family:Arial,sans-serif;white-space:pre-wrap;line-height:1.5">${escapeHtml(text)}</pre>`
+      html: html || `<pre style="font-family:Arial,sans-serif;white-space:pre-wrap;line-height:1.5">${escapeHtml(text)}</pre>`
     })
   });
   const data = await response.json().catch(() => ({}));

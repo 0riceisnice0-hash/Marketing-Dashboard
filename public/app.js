@@ -141,6 +141,26 @@ const config = {
       ["notes", "Notes / caption draft", "textarea"]
     ]
   },
+  social_guidelines: {
+    table: "social_guidelines",
+    title: "Guideline",
+    fields: [
+      ["title", "Guideline title", "text"],
+      ["category", "Category", "select", ["Brand voice", "Visual style", "Posting rules", "Lead handling", "Template", "Do not say", "General"]],
+      ["body", "Guideline / template notes", "textarea"]
+    ]
+  },
+  action_plan_items: {
+    table: "action_plan_items",
+    title: "Action plan item",
+    fields: [
+      ["title", "Title", "text"],
+      ["section", "Section", "select", ["Immediate Actions", "Website, Residential Foundation & SEO", "Social Media", "Print, Sales & Showroom", "AdminBase, Messaging & Long-Term Touchpoints", "Custom"]],
+      ["effort", "Effort", "select", ["easy", "medium", "complex"]],
+      ["detail", "Detail", "textarea"],
+      ["status", "Status", "hidden", "Active"]
+    ]
+  },
   content_requests: {
     table: "content_requests",
     title: "Content request",
@@ -346,7 +366,7 @@ function render() {
 
   const renderers = {
     dashboard: renderDashboard,
-    tickets: () => renderBoard("tickets", "status", ["New", "In Progress", "Waiting on Someone", "Done"]),
+    tickets: () => renderBoard("tickets", "status", ["New", "In Progress", "Waiting on Someone", "Parked", "Done"]),
     "todays-plan": renderTodaysPlan,
     "action-plan": renderActionPlan,
     social: renderSocial,
@@ -361,11 +381,46 @@ function render() {
 }
 
 function renderTodaysPlan() {
-  renderBoard("todays_plan", "status", ["Planned", "Doing", "Done", "Carry on tomorrow"]);
+  renderBoard("todays_plan", "status", ["Planned", "Doing", "Done", "Parked", "Carry on tomorrow"]);
 }
 
 function renderSocial() {
-  renderBoard("social_posts", "status", ["Idea", "Planned", "Scheduled", "Posted", "Parked"]);
+  const guidelines = state.social_guidelines || [];
+  view.innerHTML = `
+    <div class="board-tools">
+      <p><strong>Social media guidelines</strong><br>Keep house style, templates, do/don't rules, and content ideas in one place.</p>
+      <div class="board-actions">
+        <button onclick="window.dashboardOpen('social_guidelines')">New guideline</button>
+        <button class="primary-button" onclick="window.dashboardOpen('social_posts')">New social post</button>
+      </div>
+    </div>
+    <section class="guidelines-panel">
+      ${guidelines.length ? guidelines.map(renderGuideline).join("") : `<p class="empty">No guidelines yet. Add brand voice notes, caption templates, or posting rules here.</p>`}
+    </section>
+    <div class="grid columns" style="margin-top:16px">
+      ${["Idea", "Planned", "Scheduled", "Posted", "Parked"].map((group) => `
+        <section class="column">
+          ${columnHeader(group, (state.social_posts || []).filter((item) => item.status === group).length)}
+          <div class="card-list">${cards((state.social_posts || []).filter((item) => item.status === group), "social_posts")}</div>
+        </section>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderGuideline(item) {
+  return `
+    <article class="guideline">
+      <header>
+        <div>
+          <h4>${escapeHtml(item.title)}</h4>
+          <span class="pill">${escapeHtml(item.category || "General")}</span>
+        </div>
+        <button class="danger-action" onclick="window.dashboardDeleteRecord('social_guidelines', ${item.id})">Delete</button>
+      </header>
+      <p>${escapeHtml(item.body || "")}</p>
+    </article>
+  `;
 }
 
 function renderActionPlan() {
@@ -378,18 +433,17 @@ function renderActionPlan() {
     <div class="action-hero">
       <div>
         <p class="eyebrow">Fenster marketing action plan</p>
-        <h3>${percent}% complete</h3>
-        <p>Extracted from the uploaded preview file and merged into the hub. Tick items locally as they are handled.</p>
+        <h3>Version 2 · ${percent}% complete</h3>
+        <p>Add your own actions, park/remove what no longer matters, or turn any item into a roadmap task.</p>
       </div>
       <div class="progress-card">
         <div class="bar"><span style="width:${percent}%"></span></div>
         <strong>${done} of ${allItems.length} done</strong>
       </div>
     </div>
-    <div class="plan-filters">
-      ${["all", "easy", "medium", "complex"].map((filter) => `
-        <button class="${actionPlanFilter === filter ? "active" : ""}" onclick="window.dashboardFilterPlan('${filter}')">${effortLabel(filter)}</button>
-      `).join("")}
+    <div class="plan-filters board-actions">
+      ${["all", "easy", "medium", "complex"].map((filter) => `<button class="${actionPlanFilter === filter ? "active" : ""}" onclick="window.dashboardFilterPlan('${filter}')">${effortLabel(filter)}</button>`).join("")}
+      <button class="primary-button" onclick="window.dashboardOpen('action_plan_items')">Add action</button>
     </div>
     <div class="plan-summary grid stats">
       ${stat("Easy wins", allItems.filter((item) => item.effort === "easy").length, "Fast trust and visibility", "#12825a")}
@@ -398,14 +452,17 @@ function renderActionPlan() {
       ${stat("Visible now", visible.length, "Current filtered list", "#215ed3")}
     </div>
     <div class="plan-sections">
-      ${actionPlan.map((section) => renderPlanSection(section)).join("")}
+      ${actionPlanSections().map((section) => renderPlanSection(section)).join("")}
     </div>
   `;
 }
 
 function renderPlanSection(section) {
   const items = section.items
-    .map(([title, detail, override]) => ({ section: section.section, title, detail, effort: override || section.effort }))
+    .map((entry) => Array.isArray(entry)
+      ? { section: section.section, title: entry[0], detail: entry[1], effort: entry[2] || section.effort, customId: null }
+      : entry)
+    .filter((item) => !isActionPlanHidden(item))
     .filter((item) => actionPlanFilter === "all" || item.effort === actionPlanFilter);
 
   if (!items.length) return "";
@@ -439,17 +496,42 @@ function renderPlanItem(item) {
         </span>
       </label>
       <p>${escapeHtml(item.detail)}</p>
+      <div class="actions">
+        <button onclick="window.dashboardActionToTask('${encodeActionItem(item)}')">Set as task</button>
+        <button class="danger-action" onclick="window.dashboardDeleteActionItem('${encodeActionItem(item)}')">Delete</button>
+      </div>
     </article>
   `;
 }
 
 function flattenedActionPlan() {
-  return actionPlan.flatMap((section) => section.items.map(([title, detail, override]) => ({
+  return actionPlanSections().flatMap((section) => section.items.map((entry) => Array.isArray(entry) ? {
     section: section.section,
-    title,
-    detail,
-    effort: override || section.effort
-  })));
+    title: entry[0],
+    detail: entry[1],
+    effort: entry[2] || section.effort,
+    customId: null
+  } : entry)).filter((item) => !isActionPlanHidden(item));
+}
+
+function actionPlanSections() {
+  const sections = actionPlan.map((section) => ({ ...section, items: [...section.items] }));
+  for (const item of state.action_plan_items || []) {
+    if (item.status === "Deleted") continue;
+    let target = sections.find((section) => section.section === item.section);
+    if (!target) {
+      target = { section: item.section || "Custom", effort: item.effort || "medium", items: [] };
+      sections.push(target);
+    }
+    target.items.push({
+      section: item.section || "Custom",
+      title: item.title,
+      detail: item.detail || "",
+      effort: item.effort || "medium",
+      customId: item.id
+    });
+  }
+  return sections;
 }
 
 function actionPlanKey(item) {
@@ -476,9 +558,44 @@ function togglePlan(key, done) {
   render();
 }
 
+function encodeActionItem(item) {
+  return encodeURIComponent(JSON.stringify(item));
+}
+
+function decodeActionItem(encoded) {
+  return JSON.parse(decodeURIComponent(encoded));
+}
+
+function isActionPlanHidden(item) {
+  return !item.customId && localStorage.getItem(`action-plan-hidden:${actionPlanKey(item)}`) === "1";
+}
+
+async function deleteActionItem(encoded) {
+  const item = decodeActionItem(encoded);
+  if (!confirm(`Delete action: ${item.title}?`)) return;
+  if (item.customId) {
+    await api("/api/records/action_plan_items", { method: "PATCH", body: { id: item.customId, status: "Deleted" } });
+    state.action_plan_items = (state.action_plan_items || []).map((entry) => entry.id === item.customId ? { ...entry, status: "Deleted" } : entry);
+  } else {
+    localStorage.setItem(`action-plan-hidden:${actionPlanKey(item)}`, "1");
+  }
+  render();
+}
+
+async function actionItemToTask(encoded) {
+  const item = decodeActionItem(encoded);
+  const created = await api("/api/records/tasks", {
+    method: "POST",
+    body: { title: item.title, lane: "Today", owner: user.name, due_date: "" }
+  });
+  state.tasks = [created, ...(state.tasks || [])];
+  alert("Added to Roadmap as a task.");
+}
+
 function renderDashboard() {
-  const openTickets = (state.tickets || []).filter((item) => item.status !== "Done");
+  const openTickets = (state.tickets || []).filter((item) => !["Done", "Parked"].includes(item.status));
   const closedTickets = (state.tickets || []).filter((item) => item.status === "Done");
+  const parkedTickets = (state.tickets || []).filter((item) => item.status === "Parked");
   const urgent = openTickets.filter((item) => ["Urgent", "Boss panic mode"].includes(item.priority));
   const contentNeeded = (state.content_requests || []).filter((item) => item.status !== "Used");
   const websiteProgress = (state.website_updates || []).length;
@@ -489,8 +606,8 @@ function renderDashboard() {
     <div class="grid stats">
       ${stat("Open tickets", openTickets.length, "Requests not done yet", "#215ed3")}
       ${stat("Closed tickets", closedTickets.length, "Finished and out of the way", "#12825a")}
+      ${stat("Parked tickets", parkedTickets.length, "Paused without cluttering active work", "#6c7785")}
       ${stat("Urgent", urgent.length, "Needs eyes first", "#c23a34")}
-      ${stat("Website progress", websiteProgress, "Updates currently tracked", "#7057c8")}
     </div>
     <div class="grid two" style="margin-top:16px">
       <section class="panel">
@@ -1131,14 +1248,30 @@ function actionButtons(item, table) {
     return `<div class="actions"><button onclick="window.dashboardPatch('${table}', ${item.id}, {done: 1})">Done</button></div>`;
   }
   if (table === "todays_plan") {
-    return workflowButtons(table, item, "status", ["Doing", "Done", "Carry on tomorrow", "Planned"]);
+    return `
+      ${workflowButtons(table, item, "status", ["Doing", "Done", "Parked", "Carry on tomorrow", "Planned"])}
+      <div class="actions"><button class="danger-action" onclick="window.dashboardDeleteRecord('${table}', ${item.id})">Delete</button></div>
+    `;
   }
   if (table === "social_posts") {
     return workflowButtons(table, item, "status", ["Planned", "Scheduled", "Posted", "Parked", "Idea"]);
   }
+  if (table === "ideas") {
+    return {
+      author: user.name,
+      status: "Inbox",
+      ...body
+    };
+  }
+  if (table === "ideas") {
+    return workflowButtons(table, item, "status", ["Considering", "Approved", "Parked", "Done", "Inbox"]);
+  }
   if (table === "tickets") {
     return `
-      ${workflowButtons(table, item, "status", ["In Progress", "Waiting on Someone", "Done"])}
+      ${workflowButtons(table, item, "status", ["In Progress", "Waiting on Someone", "Parked", "Done", "New"])}
+      <div class="actions priority-actions">
+        ${["Low", "Normal", "Urgent", "Boss panic mode"].filter((priority) => item.priority !== priority).map((priority) => `<button onclick="window.dashboardPatch('${table}', ${item.id}, {priority: '${priority}'})">Priority: ${priority}</button>`).join("")}
+      </div>
       <div class="actions">
         <button onclick="window.dashboardOpenNotes(${item.id})">Notes</button>
         <button class="danger-action" onclick="window.dashboardDeleteTicket(${item.id})">Delete</button>
@@ -1222,6 +1355,20 @@ function withDefaults(table, body) {
       ...body
     };
   }
+  if (table === "action_plan_items") {
+    return {
+      section: "Custom",
+      effort: "medium",
+      status: "Active",
+      ...body
+    };
+  }
+  if (table === "social_guidelines") {
+    return {
+      category: "General",
+      ...body
+    };
+  }
   return body;
 }
 
@@ -1238,6 +1385,15 @@ async function deleteTicket(id) {
   await api("/api/records/tickets", { method: "DELETE", body: { id } });
   state.tickets = (state.tickets || []).filter((item) => item.id !== id);
   seenTicketIds.delete(id);
+  render();
+}
+
+async function deleteRecord(table, id) {
+  const item = (state[table] || []).find((entry) => entry.id === id);
+  if (!item) return;
+  if (!confirm(`Delete ${item.title || "this item"}?`)) return;
+  await api(`/api/records/${table}`, { method: "DELETE", body: { id } });
+  state[table] = (state[table] || []).filter((entry) => entry.id !== id);
   render();
 }
 
@@ -1302,10 +1458,13 @@ function slug(value) {
 window.dashboardOpen = openModal;
 window.dashboardPatch = patchRecord;
 window.dashboardDeleteTicket = deleteTicket;
+window.dashboardDeleteRecord = deleteRecord;
 window.dashboardSearchTickets = searchTickets;
 window.dashboardOpenNotes = openNotes;
 window.dashboardFilterPlan = filterPlan;
 window.dashboardTogglePlan = togglePlan;
+window.dashboardDeleteActionItem = deleteActionItem;
+window.dashboardActionToTask = actionItemToTask;
 window.dashboardFensterRefresh = loadFenster;
 window.dashboardFensterSeed = fensterSeed;
 window.dashboardFensterSync = fensterSync;

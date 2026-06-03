@@ -1,75 +1,141 @@
 # Marketing Dashboard
 
-All-in-one marketing operations dashboard for tickets, ideas, tasks, content requests, website work, tools, and shipped updates.
+Cloudflare Pages marketing operations dashboard for Fenster Glazing.
 
-## Live app
-
-Use the Cloudflare Pages URL for the real dashboard:
+Live app:
 
 https://marketing-dashboard-1d0.pages.dev
 
-GitHub Pages is only static hosting and cannot run the login API, Cloudflare Functions, or D1 database. Do not use the GitHub Pages URL for the working app.
+Important: GitHub Pages is not the working app. The dashboard needs Cloudflare Pages Functions and D1, so use the Cloudflare Pages URL.
 
-## Stack
+## Read This First
 
-- Cloudflare Pages for the frontend.
-- Cloudflare Pages Functions for the API.
-- Cloudflare D1 for tickets, tasks, ideas, website updates, content requests, notes, and changelog data.
-- GitHub connected to Cloudflare Pages for automatic deploys on push.
+This project is a static frontend plus Cloudflare Pages Functions.
 
-## First login
-
-The users live in `functions/_data/users.js`. Password values are intentionally not committed because this repository is public.
-
-| User | Username | Password secret |
-| --- | --- | --- |
-| Zac | `zac` | `PASSWORD_ZAC` |
-| Adam | `adam` | `PASSWORD_ADAM` |
-| Nick | `nick` | `PASSWORD_NICK` |
-
-For local development, create `.dev.vars` with:
+The repository is on GitHub, but this Cloudflare Pages project has historically needed an explicit Wrangler deploy after pushing code:
 
 ```bash
-PASSWORD_ZAC=change-this
-PASSWORD_ADAM=change-this
-PASSWORD_NICK=change-this
-SESSION_SECRET=change-this-local-session-secret
+npx wrangler pages deploy public --project-name marketing-dashboard --branch main
 ```
 
-For Cloudflare, add those same names as Pages/Workers secrets before using real data.
-
-## Cloudflare setup
-
-The current project is deployed to Cloudflare Pages as `marketing-dashboard`, backed by the D1 database `marketing_dashboard`.
-
-For a fresh setup:
-
-1. Create a Cloudflare Pages project named `marketing-dashboard`.
-2. Set output directory to `public`.
-3. Create a D1 database named `marketing_dashboard`.
-4. Replace `database_id` in `wrangler.toml` with the D1 database ID.
-5. Run the migration:
+Do not assume a GitHub push alone has updated the live dashboard. After deploying, check the live asset:
 
 ```bash
-npm install
-npm run db:migrate:remote
+curl https://marketing-dashboard-1d0.pages.dev/app.js
 ```
 
-6. Add a Pages/Workers secret named `SESSION_SECRET`:
+If the live file still contains old code, Cloudflare has not deployed the new version yet.
 
-```bash
-npx wrangler pages secret put SESSION_SECRET
+## What The App Does
+
+- Dashboard overview for current marketing work.
+- Tickets board with drag-and-drop workflow movement.
+- Today's Plan for shared daily tasks.
+- Action Plan for the wider Fenster marketing plan.
+- Social Media planner and guidelines.
+- Ideas board.
+- Roadmap tasks.
+- Website work board.
+- Tools tab for the Fenster Meta/social inbox bot.
+- Notes attached to records through the shared `notes` table.
+
+## Project Structure
+
+```text
+public/
+  index.html          Main HTML shell.
+  app.js              Main frontend app, rendering, tab logic, board logic, API calls.
+  styles.css          Dashboard styling.
+  fenster-logo.png    Local logo asset.
+
+functions/
+  api/[[path]].js     Main Cloudflare Pages API: login, records, notes, Fenster bot endpoints.
+  _data/users.js      Login users and secret names.
+  webhooks/meta.js    Meta/Facebook webhook handler.
+
+migrations/
+  0001_initial.sql    Core dashboard tables.
+  0002_*.sql          Today's plan, social posts, Fenster conversation tables.
+  0003-0007_*.sql     Bot decisions, queue, prompt context, action plan, guidelines.
+
+scripts/
+  smoke-test.mjs      API smoke test with an in-memory D1-style mock.
+
+workers/
+  lead-email/         Separate Worker for sending lead emails.
+
+wrangler.toml         Cloudflare Pages/D1 config.
+package.json          Wrangler scripts.
 ```
 
-7. Add the three password secrets:
+There is currently no `.github/workflows` deployment workflow in this repo.
 
-```bash
-npx wrangler pages secret put PASSWORD_ZAC
-npx wrangler pages secret put PASSWORD_ADAM
-npx wrangler pages secret put PASSWORD_NICK
-```
+## How The Code Works
 
-## Local development
+`public/index.html` loads `public/app.js`.
+
+`public/app.js`:
+
+- builds the sidebar tabs;
+- calls `/api/me` to restore a session;
+- calls `/api/bootstrap` to load all dashboard data;
+- renders the current tab into `#view`;
+- sends record changes to `/api/records/:table`;
+- opens notes through `/api/notes/:table/:id`;
+- renders the Tools/Fenster bot UI and calls `/api/fenster/...`.
+
+`functions/api/[[path]].js` is the backend router. It handles:
+
+- `POST /api/login`
+- `GET /api/me`
+- `GET /api/bootstrap`
+- `GET/POST/PATCH/DELETE /api/records/:table`
+- `GET/POST /api/notes/:table/:id`
+- `/api/fenster/...` bot and conversation endpoints
+
+The database is Cloudflare D1. Tables are created by the SQL files in `migrations/`.
+
+## Data Tables
+
+Main record tables:
+
+- `tickets`
+- `ideas`
+- `tasks`
+- `todays_plan`
+- `social_posts`
+- `social_guidelines`
+- `action_plan_items`
+- `content_requests`
+- `website_updates`
+- `changelog`
+- `notes`
+
+Fenster bot tables:
+
+- `fenster_conversations`
+- `fenster_messages`
+- `fenster_reviews`
+- `fenster_events`
+- `fenster_settings`
+- `fenster_bot_queue`
+
+## Login And Secrets
+
+Users live in `functions/_data/users.js`.
+
+Passwords are not committed. Cloudflare Pages must have these secrets:
+
+- `PASSWORD_ZAC`
+- `PASSWORD_ADAM`
+- `PASSWORD_NICK`
+- `SESSION_SECRET`
+
+For local development, copy `.dev.vars.example` to `.dev.vars`.
+
+## Local Development
+
+Local development is optional. The real app runs on Cloudflare.
 
 ```bash
 npm install
@@ -77,24 +143,93 @@ npm run db:migrate:local
 npm run dev
 ```
 
-Open the local URL from Wrangler and sign in with one of the temporary users.
+If PowerShell blocks `npm.ps1`, use:
 
-Local development is optional. The live dashboard runs on Cloudflare and does not require your personal machine to stay on.
+```powershell
+npm.cmd install
+npm.cmd run dev
+```
 
-## What is included
+Wrangler local D1 can be awkward. If local Pages dev says tables are missing, verify the real behavior with the smoke test and deploy to Cloudflare when the code is ready.
 
-- Dashboard overview with open tickets, urgent work, content requests, and website updates.
-- Ticket board with New, In Progress, Waiting on Someone, and Done lanes.
-- Ideas bank for staff suggestions.
-- Marketing roadmap split into Today, This Week, and Later.
-- Website tab for planned/live site work and shipped updates.
-- Content request board for photos, videos, reviews, case studies, and showroom assets.
-- Tools placeholder section for the future Facebook messaging app and other marketing tools.
-- Changelog for weekly shipped updates.
+## Testing
 
-## Next sensible upgrades
+Run the smoke test before pushing:
 
-- Replace the temporary shared password with Cloudflare Access or hashed credentials.
-- Add role-specific permissions.
-- Add R2 uploads for screenshots, photos, and video assets.
-- Add the Facebook messaging module as a separate Worker-backed tool.
+```bash
+npm run smoke
+```
+
+This exercises the Pages Function API with an in-memory mock database.
+
+Also run JS syntax checks after editing frontend/backend JS:
+
+```bash
+node --check public/app.js
+node --check functions/api/[[path]].js
+```
+
+## Updating The Live Site
+
+Recommended workflow:
+
+```bash
+git status -sb
+npm run smoke
+node --check public/app.js
+node --check functions/api/[[path]].js
+git add .
+git commit -m "Describe the update"
+git push origin main
+npx wrangler pages deploy public --project-name marketing-dashboard --branch main
+```
+
+The deploy command prints a preview URL like:
+
+```text
+https://<hash>.marketing-dashboard-1d0.pages.dev
+```
+
+After deploy, confirm production is serving the new code:
+
+```bash
+curl https://marketing-dashboard-1d0.pages.dev/app.js
+```
+
+Search that output for a string from your new code. If it is not there, Cloudflare is still serving an older deployment.
+
+## Database Migrations
+
+For local D1:
+
+```bash
+npm run db:migrate:local
+```
+
+For production D1:
+
+```bash
+npm run db:migrate:remote
+```
+
+Only run remote migrations when a code change actually needs schema changes.
+
+## Common Gotchas
+
+- Pushing to GitHub may not update the live Cloudflare app. Run the Wrangler Pages deploy command.
+- The live app URL is `https://marketing-dashboard-1d0.pages.dev`.
+- `public/app.js` is a single large file. Most UI bugs are in render helpers near the bottom or tab render functions near the middle.
+- If a tab header changes but the old tab content stays visible, a JavaScript error probably happened during render.
+- Notes are generic. They should use `/api/notes/:table/:id`, not ticket-only code.
+- If changing card metadata dropdowns, make sure only fields with real option arrays are rendered as selects.
+- The smoke test has a mock SQL layer. If backend SQL changes, update `scripts/smoke-test.mjs` too.
+
+## Last Known Deploy Pattern
+
+Previous successful Cloudflare deployments used:
+
+```bash
+npx wrangler pages deploy public --project-name marketing-dashboard --branch main
+```
+
+Keep this command in future Codex chats so the same GitHub-vs-Cloudflare confusion does not happen again.

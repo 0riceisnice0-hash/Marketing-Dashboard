@@ -4,10 +4,15 @@ const tables = {
   tickets: [],
   ideas: [],
   tasks: [],
+  todays_plan: [],
   content_requests: [],
   website_updates: [],
   changelog: [],
-  notes: []
+  notes: [],
+  fenster_conversations: [],
+  fenster_messages: [],
+  fenster_reviews: [],
+  fenster_events: []
 };
 
 let nextId = 1;
@@ -65,6 +70,30 @@ const bootstrap = await call("/api/bootstrap", { headers: { Cookie: cookie } });
 const data = await bootstrap.json();
 assert(data.tickets.some((item) => item.title === "Smoke test ticket"), "bootstrap should include new ticket");
 
+const plan = await call("/api/records/todays_plan", {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({
+    title: "Smoke test plan",
+    owner: "Zac",
+    status: "Planned",
+    notes: "Created by smoke test.",
+    updated_by: "Zac"
+  })
+});
+
+assert(plan.status === 201, "today's plan create should work");
+
+const seed = await call("/api/fenster/demo/seed", {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: "{}"
+});
+
+assert(seed.status === 200, "Fenster demo seed should work");
+const seeded = await seed.json();
+assert(seeded.conversations.length >= 2, "Fenster state should include seeded conversations");
+
 console.log("Smoke test passed");
 
 async function call(path, init = {}) {
@@ -89,6 +118,7 @@ function queryAll({ sql, values }) {
 
 function queryFirst({ sql, values }) {
   const table = tableFrom(sql);
+  if (!sql.includes("WHERE")) return tables[table][0] || null;
   return tables[table].find((item) => item.id === values[0]) || null;
 }
 

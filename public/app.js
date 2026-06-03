@@ -1,6 +1,7 @@
 const tabs = [
   { id: "dashboard", label: "Dashboard", icon: "D" },
   { id: "tickets", label: "Tickets", icon: "T" },
+  { id: "todays-plan", label: "Today's Plan", icon: "N" },
   { id: "action-plan", label: "Action Plan", icon: "P" },
   { id: "ideas", label: "Ideas", icon: "I" },
   { id: "roadmap", label: "Roadmap", icon: "R" },
@@ -12,6 +13,7 @@ const tabs = [
 const viewCopy = {
   dashboard: "What needs attention, what is waiting, and what shipped recently.",
   tickets: "Requests from the team, moved through a clear status board.",
+  "todays-plan": "A shared plan for the day, with updates, done states, and carry-forward notes.",
   "action-plan": "The extracted Fenster marketing plan, grouped by effort and progress.",
   ideas: "A holding area for good ideas before they interrupt the actual work.",
   roadmap: "Today, this week, and later, without the noise.",
@@ -113,6 +115,17 @@ const config = {
       ["due_date", "Due date", "date"]
     ]
   },
+  todays_plan: {
+    table: "todays_plan",
+    title: "Plan item",
+    fields: [
+      ["title", "Plan item", "text"],
+      ["owner", "Owner", "hidden", "currentUser"],
+      ["status", "Status", "select", ["Planned", "Doing", "Done", "Carry on tomorrow"]],
+      ["notes", "Notes / updates", "textarea"],
+      ["updated_by", "Updated by", "hidden", "currentUser"]
+    ]
+  },
   content_requests: {
     table: "content_requests",
     title: "Content request",
@@ -149,6 +162,9 @@ const config = {
 };
 
 let state = {};
+let fensterState = null;
+let fensterTab = "awaiting";
+let selectedFensterConversationId = null;
 let current = "dashboard";
 let user = null;
 let ticketSearch = "";
@@ -230,6 +246,7 @@ function render() {
   const renderers = {
     dashboard: renderDashboard,
     tickets: () => renderBoard("tickets", "status", ["New", "In Progress", "Waiting on Someone", "Done"]),
+    "todays-plan": renderTodaysPlan,
     "action-plan": renderActionPlan,
     ideas: () => renderBoard("ideas", "status", ["Inbox", "Considering", "Approved", "Parked", "Done"]),
     roadmap: renderRoadmap,
@@ -239,6 +256,10 @@ function render() {
   };
 
   renderers[current]();
+}
+
+function renderTodaysPlan() {
+  renderBoard("todays_plan", "status", ["Planned", "Doing", "Done", "Carry on tomorrow"]);
 }
 
 function renderActionPlan() {
@@ -485,14 +506,274 @@ function renderWebsite() {
 
 function renderTools() {
   const tools = [
-    ["Coming soon", "Facebook messaging app", "Reserved for the Meta API module when you are ready to add it."],
     ["Coming soon", "Lead scrapers", "A place to launch or document lead collection tools."],
     ["Coming soon", "Prompt templates", "Reusable marketing, SEO, review reply, and product copy prompts."],
     ["Coming soon", "Reporting links", "Ads, Search Console, analytics, call tracking, and ranking dashboards."],
     ["Coming soon", "Asset library", "Future home for R2-backed photos, videos, screenshots, and brand files."],
     ["Coming soon", "Automation notes", "Campaign routines, weekly jobs, and checks that should become Workers later."]
   ];
-  view.innerHTML = `<div class="tool-grid">${tools.map(([badge, name, text]) => `<article class="tool"><span class="tool-badge">${badge}</span><h3>${name}</h3><p>${text}</p></article>`).join("")}</div>`;
+  view.innerHTML = `
+    <section class="panel fenster-tool">
+      <div class="panel-header">
+        <div>
+          <h3>Fenster Meta Bot</h3>
+          <p class="panel-subtitle">Facebook inbox, draft replies, and approval-only sending on the same Cloudflare Pages app.</p>
+        </div>
+        <div class="actions tool-actions">
+          <button onclick="window.dashboardFensterSeed()">Seed demo</button>
+          <button onclick="window.dashboardFensterSync()">Sync Facebook</button>
+          <button onclick="window.dashboardFensterRefresh()">Refresh</button>
+        </div>
+      </div>
+      <p id="fenster-status" class="result-note">Loading Fenster Meta Bot...</p>
+      <div id="fenster-app" class="fenster-app"></div>
+    </section>
+    <div class="tool-grid secondary-tools">${tools.map(([badge, name, text]) => `<article class="tool"><span class="tool-badge">${badge}</span><h3>${name}</h3><p>${text}</p></article>`).join("")}</div>
+  `;
+  loadFenster();
+}
+
+async function loadFenster() {
+  const mount = $("#fenster-app");
+  const status = $("#fenster-status");
+  if (!mount || current !== "tools") return;
+  try {
+    fensterState = await api("/api/fenster/state");
+    status.textContent = "";
+    renderFenster();
+  } catch (error) {
+    status.textContent = error.message;
+    mount.innerHTML = "";
+  }
+}
+
+function renderFenster() {
+  const mount = $("#fenster-app");
+  if (!mount || !fensterState) return;
+  const conversations = fensterConversations();
+  const visible = visibleFensterConversations();
+  const awaiting = conversations.filter((item) => latestFensterMessageIsInbound(item) && !isFensterHidden(item)).length;
+  const drafts = conversations.filter((item) => item.draft_status === "draft" && latestFensterMessageIsInbound(item)).length;
+  const hidden = conversations.filter(isFensterHidden).length;
+
+  if (!selectedFensterConversationId || !visible.some((item) => item.id === selectedFensterConversationId)) {
+    selectedFensterConversationId = visible[0]?.id || null;
+  }
+
+  mount.innerHTML = `
+    <div class="fenster-metrics">
+      ${fensterMetric(conversations.length, "Facebook threads")}
+      ${fensterMetric(awaiting, "Awaiting reply")}
+      ${fensterMetric(drafts, "Drafts ready")}
+      ${fensterMetric(hidden, "Hidden")}
+      ${fensterMetric(fensterState.config.openAi ? "Connected" : "Missing", "OpenAI")}
+      ${fensterMetric(fensterState.config.meta ? "Connected" : "No token", "Meta")}
+    </div>
+    <div class="fenster-tabs">
+      ${[
+        ["awaiting", "Awaiting reply"],
+        ["new", "New enquiries"],
+        ["all", "All conversations"]
+      ].map(([id, label]) => `<button class="${fensterTab === id ? "active" : ""}" onclick="window.dashboardFensterTab('${id}')">${label}</button>`).join("")}
+    </div>
+    <div class="fenster-shell">
+      <aside class="fenster-list">
+        <div class="panel-header compact">
+          <div>
+            <h3>${fensterTab === "new" ? "New enquiries" : fensterTab === "all" ? "All conversations" : "Awaiting reply"}</h3>
+            <p class="panel-subtitle">${visible.length} visible thread${visible.length === 1 ? "" : "s"}</p>
+          </div>
+        </div>
+        <div class="fenster-threads">
+          ${visible.length ? visible.map(renderFensterThread).join("") : `<p class="empty">No conversations here.</p>`}
+        </div>
+      </aside>
+      <section class="fenster-detail">
+        ${selectedFensterConversationId ? renderFensterDetail(visible.find((item) => item.id === selectedFensterConversationId)) : `<div class="detail-empty">Sync Facebook or seed demo data to begin.</div>`}
+      </section>
+    </div>
+  `;
+}
+
+function fensterMetric(value, label) {
+  return `<article class="metric"><strong>${escapeHtml(value)}</strong><span>${label}</span></article>`;
+}
+
+function fensterConversations() {
+  return (fensterState?.conversations || [])
+    .filter((item) => item.channel === "facebook" || item.channel === "instagram")
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+}
+
+function latestFensterMessageIsInbound(conversation) {
+  return conversation.messages?.at(-1)?.direction === "inbound";
+}
+
+function lastFensterCustomerMessage(conversation) {
+  return [...(conversation.messages || [])].reverse().find((message) => message.direction === "inbound");
+}
+
+function isFensterHidden(conversation) {
+  const latestInbound = lastFensterCustomerMessage(conversation);
+  return Boolean(latestInbound && conversation.hidden_until_message_id === latestInbound.id);
+}
+
+function isFensterNewEnquiry(conversation) {
+  const inbound = (conversation.messages || []).filter((message) => message.direction === "inbound");
+  if (!inbound.length || !latestFensterMessageIsInbound(conversation)) return false;
+  const latestInbound = inbound.at(-1);
+  const previous = [...(conversation.messages || [])]
+    .reverse()
+    .find((message) => new Date(message.created_at).getTime() < new Date(latestInbound.created_at).getTime());
+  if (!previous) return true;
+  return new Date(latestInbound.created_at).getTime() - new Date(previous.created_at).getTime() >= 60 * 24 * 60 * 60 * 1000;
+}
+
+function visibleFensterConversations() {
+  const conversations = fensterConversations();
+  if (fensterTab === "all") return conversations;
+  const inbound = conversations.filter((item) => latestFensterMessageIsInbound(item) && !isFensterHidden(item));
+  if (fensterTab === "new") return inbound.filter(isFensterNewEnquiry);
+  return inbound.filter((item) => !isFensterNewEnquiry(item));
+}
+
+function renderFensterThread(conversation) {
+  const last = conversation.messages?.at(-1);
+  const active = conversation.id === selectedFensterConversationId ? "active" : "";
+  const label = latestFensterMessageIsInbound(conversation)
+    ? isFensterNewEnquiry(conversation) ? "New enquiry" : "Awaiting reply"
+    : "Replied";
+  return `
+    <button class="fenster-thread ${active}" onclick="window.dashboardFensterSelect('${conversation.id}')">
+      <span class="thread-top">
+        <strong>${escapeHtml(conversation.display_name)}</strong>
+        <time>${formatDate(conversation.updated_at)}</time>
+      </span>
+      <span class="thread-snippet">${escapeHtml(last?.text || "No message text")}</span>
+      <span class="thread-bottom"><span>${label}</span><span>${escapeHtml(conversation.draft_status)}</span></span>
+    </button>
+  `;
+}
+
+function renderFensterDetail(conversation) {
+  if (!conversation) return `<div class="detail-empty">Select a conversation.</div>`;
+  const draftUnavailable = (conversation.draft || "").startsWith("[Draft unavailable:");
+  const canGenerate = latestFensterMessageIsInbound(conversation);
+  const canSend = canGenerate && conversation.draft && !draftUnavailable;
+  const canHide = canGenerate && fensterTab !== "all";
+
+  return `
+    <div class="detail-head">
+      <div>
+        <p class="eyebrow">${escapeHtml(conversation.channel)} inbox</p>
+        <h3>${escapeHtml(conversation.display_name)}</h3>
+      </div>
+      <span class="meta">${formatDateTime(conversation.updated_at)}</span>
+    </div>
+    <div class="message-stream">
+      ${(conversation.messages || []).map((message) => `
+        <div class="message ${message.direction === "outbound" ? "outbound" : "inbound"}">
+          <div>${escapeHtml(message.text)}</div>
+          <time>${formatDateTime(message.created_at)}</time>
+        </div>
+      `).join("")}
+    </div>
+    <div class="draft-box">
+      <label>
+        Suggested reply
+        <textarea id="fenster-draft">${escapeHtml(conversation.draft || "")}</textarea>
+      </label>
+      <div class="draft-actions">
+        <button onclick="window.dashboardFensterGenerate()" ${canGenerate ? "" : "disabled"}>Generate draft</button>
+        <button onclick="window.dashboardFensterSaveDraft()">Save edit</button>
+        <button class="primary-button" onclick="window.dashboardFensterSend()" ${canSend ? "" : "disabled"}>Send reply</button>
+        <button onclick="window.dashboardFensterHide()" ${canHide ? "" : "disabled"}>Hide</button>
+        <span class="meta">${escapeHtml(conversation.draft_status)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function setFensterStatus(text) {
+  const status = $("#fenster-status");
+  if (status) status.textContent = text;
+}
+
+async function fensterAction(path, options = {}, progress = "Working...") {
+  setFensterStatus(progress);
+  try {
+    await api(path, options);
+    await loadFenster();
+  } catch (error) {
+    setFensterStatus(error.message);
+    alert(error.message);
+  }
+}
+
+function fensterSetTab(tab) {
+  fensterTab = tab;
+  selectedFensterConversationId = null;
+  renderFenster();
+}
+
+function fensterSelect(id) {
+  selectedFensterConversationId = id;
+  renderFenster();
+}
+
+function selectedFensterConversation() {
+  return fensterConversations().find((item) => item.id === selectedFensterConversationId);
+}
+
+async function fensterSeed() {
+  await fensterAction("/api/fenster/demo/seed", { method: "POST", body: {} }, "Seeding demo conversations...");
+}
+
+async function fensterSync() {
+  await fensterAction("/api/fenster/meta/sync", { method: "POST", body: {} }, "Syncing Facebook...");
+}
+
+async function fensterGenerate() {
+  if (!selectedFensterConversationId) return;
+  await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/generate-draft`, { method: "POST", body: {} }, "Generating draft...");
+}
+
+async function fensterSaveDraft() {
+  if (!selectedFensterConversationId) return;
+  await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/draft`, {
+    method: "POST",
+    body: { draft: $("#fenster-draft")?.value || "" }
+  }, "Saving draft...");
+}
+
+async function fensterHide() {
+  if (!selectedFensterConversationId) return;
+  const conversation = selectedFensterConversation();
+  if (!confirm(`Hide ${conversation?.display_name || "this thread"} until they send another message?`)) return;
+  await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/hide`, { method: "POST", body: {} }, "Hiding conversation...");
+}
+
+async function fensterSend() {
+  if (!selectedFensterConversationId) return;
+  const conversation = selectedFensterConversation();
+  if (!confirm(`Send this reply to ${conversation?.display_name || "this selected user"}?`)) return;
+  await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/send`, {
+    method: "POST",
+    body: {
+      text: $("#fenster-draft")?.value || "",
+      confirm: `SEND:${selectedFensterConversationId}`
+    }
+  }, "Sending reply...");
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  return new Date(value).toLocaleDateString();
+}
+
+function formatDateTime(value) {
+  if (!value) return "";
+  return new Date(value).toLocaleString();
 }
 
 function renderChangelog() {
@@ -540,6 +821,7 @@ function columnHeader(title, count) {
 function boardHint(table) {
   const hints = {
     tickets: "Move requests across the board as they progress. The action buttons are workflow moves.",
+    todays_plan: "Anyone can add the day's plan, add notes, mark it done, or carry it forward tomorrow.",
     ideas: "Capture ideas here, then decide whether they become real work.",
     content_requests: "Keep asset requests visible so photos, reviews, and videos do not get lost."
   };
@@ -584,6 +866,11 @@ function metaFor(item, table) {
       ["Lane", item.lane, "status"],
       ["Due", item.due_date, "due_date"]
     ],
+    todays_plan: [
+      ["Owner", item.owner, "owner"],
+      ["Status", item.status, "status"],
+      ["Updated by", item.updated_by, "author"]
+    ],
     content_requests: [
       ["Asset", item.asset_type, "asset_type"],
       ["From", item.requester, "requester"],
@@ -607,6 +894,9 @@ function metaFor(item, table) {
 function actionButtons(item, table) {
   if (table === "tasks") {
     return `<div class="actions"><button onclick="window.dashboardPatch('${table}', ${item.id}, {done: 1})">Done</button></div>`;
+  }
+  if (table === "todays_plan") {
+    return workflowButtons(table, item, "status", ["Doing", "Done", "Carry on tomorrow", "Planned"]);
   }
   if (table === "tickets") {
     return `
@@ -673,6 +963,14 @@ function withDefaults(table, body) {
       requester: user.name,
       status: "New",
       owner: "Zac",
+      ...body
+    };
+  }
+  if (table === "todays_plan") {
+    return {
+      owner: user.name,
+      updated_by: user.name,
+      status: "Planned",
       ...body
     };
   }
@@ -749,3 +1047,12 @@ window.dashboardSearchTickets = searchTickets;
 window.dashboardOpenNotes = openNotes;
 window.dashboardFilterPlan = filterPlan;
 window.dashboardTogglePlan = togglePlan;
+window.dashboardFensterRefresh = loadFenster;
+window.dashboardFensterSeed = fensterSeed;
+window.dashboardFensterSync = fensterSync;
+window.dashboardFensterTab = fensterSetTab;
+window.dashboardFensterSelect = fensterSelect;
+window.dashboardFensterGenerate = fensterGenerate;
+window.dashboardFensterSaveDraft = fensterSaveDraft;
+window.dashboardFensterSend = fensterSend;
+window.dashboardFensterHide = fensterHide;

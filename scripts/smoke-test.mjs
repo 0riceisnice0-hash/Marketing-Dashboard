@@ -14,7 +14,10 @@ const tables = {
   fenster_messages: [],
   fenster_reviews: [],
   fenster_events: [],
-  fenster_settings: [{ key: "bot_active", value: "false" }],
+  fenster_settings: [
+    { key: "bot_active", value: "false" },
+    { key: "ai_prompt_context", value: "Never say warranties or guarantees are transferable." }
+  ],
   fenster_bot_queue: []
 };
 
@@ -141,6 +144,16 @@ assert(callbackDecision.status === 200, "callback lead decision should work");
 const callbackData = await callbackDecision.json();
 assert(callbackData.decision_action === "FLAG_HUMAN", "callback leads should flag human");
 assert(callbackData.draft_status === "flag-human", "callback leads should not create a sendable draft");
+
+const promptSave = await call("/api/fenster/bot/prompt", {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({ promptContext: "Never say warranties or guarantees are transferable." })
+});
+
+assert(promptSave.status === 200, "AI prompt context save should work");
+const promptData = await promptSave.json();
+assert(promptData.bot.promptContext.includes("warranties"), "Fenster state should return saved prompt context");
 
 const social = await call("/api/records/social_posts", {
   method: "POST",

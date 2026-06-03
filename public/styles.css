@@ -541,9 +541,17 @@ textarea:focus {
 }
 
 .pill.status-parked,
-.pill.status-carry-on-tomorrow {
+.pill.status-carry-on-tomorrow,
+.pill.status-no-reply,
+.pill.status-rejected {
   background: #eef1ef;
   color: var(--muted);
+}
+
+.pill.status-human-review,
+.pill.status-flag-human {
+  background: #fae8e7;
+  color: var(--red);
 }
 
 .pill.status-easy {
@@ -810,6 +818,34 @@ textarea:focus {
 
 .detail-head h3 {
   margin: 0;
+}
+
+.decision-banner {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #e5f5ee;
+  color: var(--green-dark);
+}
+
+.decision-banner.danger {
+  background: #fae8e7;
+  color: var(--red);
+}
+
+.decision-banner.quiet {
+  background: #eef1ef;
+  color: var(--muted);
+}
+
+.decision-banner strong {
+  font-size: 0.85rem;
+}
+
+.decision-banner span {
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .message-stream {

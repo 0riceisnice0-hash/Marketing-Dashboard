@@ -178,7 +178,7 @@ async function fenster(context, route, user) {
   if (request.method === "POST" && route === "meta/sync") return fensterSyncMeta(env);
   if (request.method === "POST" && route === "drafts/regenerate") return fensterRegenerateDrafts(env);
 
-  const draftMatch = route.match(/^conversations\/([^/]+)\/(draft|generate-draft|send|hide)$/);
+  const draftMatch = route.match(/^conversations\/([^/]+)\/(draft|generate-draft|send|hide|reject)$/);
   if (draftMatch && request.method === "POST") {
     return fensterConversationAction(env, request, draftMatch[1], draftMatch[2], user);
   }
@@ -276,9 +276,20 @@ async function fensterSyncMeta(env) {
       await addFensterMessage(env, conversation.id, direction, message.message, message.id, message.created_time, message);
       importedMessages += 1;
       if (direction === "inbound") {
+        const decision = await safeGenerateDecision(env, await fensterConversation(env, conversation.id));
         await env.DB.prepare(
-          "UPDATE fenster_conversations SET status = ?, draft_status = ?, hidden_until_message_id = '', updated_at = ? WHERE id = ?"
-        ).bind("new", "needs-draft", message.created_time || new Date().toISOString(), conversation.id).run();
+          "UPDATE fenster_conversations SET status = ?, draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, hidden_until_message_id = '', updated_at = ? WHERE id = ?"
+        ).bind(
+          statusForDecision(decision),
+          decision.reply,
+          draftStatusForDecision(decision),
+          decision.action,
+          decision.internal_note,
+          message.created_time || new Date().toISOString(),
+          conversation.id
+        ).run();
+      } else {
+        await reconcileOutboundMessage(env, conversation.id, message.message, message.id, message.created_time, message);
       }
     }
   }
@@ -294,11 +305,11 @@ async function fensterRegenerateDrafts(env) {
     if (conversation.channel !== "facebook") continue;
     if (conversation.messages.at(-1)?.direction !== "inbound") continue;
     if (conversation.draft_status === "sent") continue;
-    if (!isGeneratedPlaceholder(conversation.draft)) continue;
-    const draft = await safeGenerateDraft(env, conversation);
+    if (!isGeneratedPlaceholder(conversation.draft) && conversation.decision_action === "REPLY") continue;
+    const decision = await safeGenerateDecision(env, conversation);
     await env.DB.prepare(
-      "UPDATE fenster_conversations SET draft = ?, draft_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind(draft, "draft", conversation.id).run();
+      "UPDATE fenster_conversations SET status = ?, draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(statusForDecision(decision), decision.reply, draftStatusForDecision(decision), decision.action, decision.internal_note, conversation.id).run();
     regenerated += 1;
   }
   await fensterEvent(env, "drafts.regenerated", { regenerated });
@@ -312,18 +323,18 @@ async function fensterConversationAction(env, request, id, action, user) {
 
   if (action === "draft") {
     await env.DB.prepare(
-      "UPDATE fenster_conversations SET draft = ?, draft_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind(String(body.draft || ""), "draft", id).run();
+      "UPDATE fenster_conversations SET draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(String(body.draft || ""), "draft", "REPLY", "Manual reply edit saved for approval.", id).run();
     await fensterEvent(env, "draft.updated", { conversationId: id, by: user.name });
     return json(await fensterConversation(env, id));
   }
 
   if (action === "generate-draft") {
-    const draft = await safeGenerateDraft(env, conversation);
+    const decision = await safeGenerateDecision(env, conversation);
     await env.DB.prepare(
-      "UPDATE fenster_conversations SET draft = ?, draft_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind(draft, "draft", id).run();
-    await fensterEvent(env, "draft.generated", { conversationId: id, by: user.name });
+      "UPDATE fenster_conversations SET status = ?, draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(statusForDecision(decision), decision.reply, draftStatusForDecision(decision), decision.action, decision.internal_note, id).run();
+    await fensterEvent(env, "decision.generated", { conversationId: id, by: user.name, action: decision.action, internal_note: decision.internal_note });
     return json(await fensterConversation(env, id));
   }
 
@@ -340,15 +351,24 @@ async function fensterConversationAction(env, request, id, action, user) {
   if (action === "send") {
     if (body.confirm !== `SEND:${id}`) return json({ error: "Send confirmation missing; message was not sent." }, 400);
     const text = String(body.text || conversation.draft || "").trim();
+    if (conversation.decision_action !== "REPLY") return json({ error: "This conversation is not approved for an automatic reply." }, 400);
     if (!text) return json({ error: "No reply text provided" }, 400);
     if (text.includes("[Draft unavailable:")) return json({ error: "Draft is unavailable; generate or write a valid reply first." }, 400);
     const result = await sendMetaMessage(env, conversation, text);
-    await addFensterMessage(env, id, "outbound", text, "", new Date().toISOString(), result);
+    await addFensterMessage(env, id, "outbound", text, result.message_id || "", new Date().toISOString(), result);
     await env.DB.prepare(
-      "UPDATE fenster_conversations SET draft = '', draft_status = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind("sent", "replied", id).run();
+      "UPDATE fenster_conversations SET draft = '', draft_status = ?, status = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind("sent", "replied", "Reply approved and sent.", id).run();
     await fensterEvent(env, "message.sent", { conversationId: id, by: user.name });
     return json({ ok: true, result, conversation: await fensterConversation(env, id) });
+  }
+
+  if (action === "reject") {
+    await env.DB.prepare(
+      "UPDATE fenster_conversations SET draft_status = ?, status = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind("rejected", "human-review", String(body.note || "Bot decision rejected by user."), id).run();
+    await fensterEvent(env, "decision.rejected", { conversationId: id, by: user.name, note: body.note || "" });
+    return json(await fensterConversation(env, id));
   }
 
   return json({ error: "Not found" }, 404);
@@ -377,6 +397,10 @@ async function createFensterConversation(env, input) {
 }
 
 async function addFensterMessage(env, conversationId, direction, text, externalId = "", createdAt = "", raw = {}) {
+  if (externalId) {
+    const duplicate = await env.DB.prepare("SELECT id FROM fenster_messages WHERE external_id = ?").bind(externalId).first();
+    if (duplicate) return;
+  }
   await env.DB.prepare(
     "INSERT INTO fenster_messages (id, conversation_id, external_id, direction, text, raw_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
   ).bind(
@@ -388,6 +412,23 @@ async function addFensterMessage(env, conversationId, direction, text, externalI
     JSON.stringify(raw || {}),
     createdAt || new Date().toISOString()
   ).run();
+}
+
+async function reconcileOutboundMessage(env, conversationId, text, externalId = "", createdAt = "", raw = {}) {
+  if (!text) return;
+  if (externalId) {
+    const duplicate = await env.DB.prepare("SELECT id FROM fenster_messages WHERE external_id = ?").bind(externalId).first();
+    if (duplicate) return;
+  }
+  const recent = await env.DB.prepare(
+    "SELECT id FROM fenster_messages WHERE conversation_id = ? AND direction = 'outbound' AND text = ? AND external_id = '' ORDER BY created_at DESC LIMIT 1"
+  ).bind(conversationId, text).first();
+  if (recent) {
+    await env.DB.prepare("UPDATE fenster_messages SET external_id = ?, raw_json = ? WHERE id = ?")
+      .bind(externalId || "", JSON.stringify(raw || {}), recent.id).run();
+    return;
+  }
+  await addFensterMessage(env, conversationId, "outbound", text, externalId, createdAt, raw);
 }
 
 async function fensterEvent(env, type, detail = {}) {
@@ -417,16 +458,18 @@ function isGeneratedPlaceholder(text = "") {
     text.startsWith("Thanks for getting in touch. Could you send");
 }
 
-async function safeGenerateDraft(env, conversation) {
+async function safeGenerateDecision(env, conversation) {
   try {
-    return await generateDraft(env, conversation);
+    return await generateDecision(env, conversation);
   } catch (error) {
-    return unavailableDraft(error.message);
+    return flagHuman(`Decision failed: ${error.message}`);
   }
 }
 
-async function generateDraft(env, conversation) {
-  if (!env.OPENAI_API_KEY) return unavailableDraft();
+async function generateDecision(env, conversation) {
+  const prefilter = localDecision(conversation);
+  if (prefilter) return prefilter;
+  if (!env.OPENAI_API_KEY) return flagHuman("OpenAI key missing. Human review needed.");
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -440,7 +483,7 @@ async function generateDraft(env, conversation) {
         ...compactHistory(conversation),
         {
           role: "user",
-          content: "Draft the next Fenster Glazing reply to the latest inbound customer message. Use earlier messages only as context."
+          content: "Return the JSON decision object for the latest inbound customer message. Return valid JSON only."
         }
       ],
       text: { verbosity: "low" }
@@ -448,7 +491,7 @@ async function generateDraft(env, conversation) {
   });
   if (!response.ok) throw new Error(`OpenAI error ${response.status}: ${await response.text()}`);
   const data = await response.json();
-  return extractOpenAiText(data) || unavailableDraft("OpenAI returned no text");
+  return normaliseDecision(extractOpenAiText(data));
 }
 
 function extractOpenAiText(data) {
@@ -466,6 +509,19 @@ function extractOpenAiText(data) {
 function fensterInstructions() {
   return `You are the customer enquiry assistant for Fenster Glazing.
 
+Your job is to decide whether an incoming Facebook or Instagram message should receive an automatic reply, be ignored, or be flagged for a human.
+
+Return valid JSON only with exactly these keys: action, reply, internal_note.
+
+Allowed actions:
+REPLY: normal customer enquiry, quote request, product question, appointment request, showroom question, pricing question, or general sales conversation.
+NO_REPLY: thanks, thank you, okay, cheers, sounds good, thumbs-up style messages, short acknowledgements ending the conversation, duplicate messages, or automated spam with no useful enquiry.
+FLAG_HUMAN: complaint, angry customer, warranty issue, existing job issue, supplier/trade message, message asking for a specific person/director/boss/manager/Nick/Perry/Adam/Jayk/named staff member, legal/planning/payment/invoice/refund/cancellation/contract issue, anything unclear or risky, internal/boss/team messages, sensitive personal situations, or anything outside Fenster Glazing's normal products and services.
+
+For REPLY, set reply to the customer-facing reply and internal_note to an empty string unless there is something useful for the team.
+For NO_REPLY, set reply to an empty string and internal_note to the reason.
+For FLAG_HUMAN, set reply to an empty string and internal_note to what the team should check.
+
 Fenster Glazing supplies and installs high-quality windows and doors for residential and commercial customers. The company is based at 97-98 Alston Drive, Bradwell Abbey, Milton Keynes, Buckinghamshire, MK13 9HF. Phone: 01908 429200. Email: info@fensterglazing.com.
 
 Fenster Glazing works mainly across Milton Keynes, Northampton, Bedfordshire, Buckinghamshire, Ampthill, Toddington, Leighton Buzzard and surrounding areas. Commercial projects may be handled more widely across the UK.
@@ -482,9 +538,68 @@ For new enquiries, collect name, phone, email, postcode or town, product wanted,
 
 If asked for a price, say: "The quickest way to get an accurate starting price is to use our Instant Pricing Tool, or I can take a few details and ask the team to come back to you."
 
-Never offer legal planning advice as fact. Never promise an exact fitting date. Never diagnose repair issues from a message alone. Never mention being an AI unless asked.
+Never offer legal planning advice as fact. Never promise an exact fitting date. Never diagnose repair issues from a message alone. Never mention being an AI unless asked. Never handle complaints, warranty issues, invoices, refunds, cancellations, existing job problems, or messages for named staff automatically.
 
-Return only the exact reply text to send.`;
+Return valid JSON only.`;
+}
+
+function normaliseDecision(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    const action = String(parsed.action || "").trim().toUpperCase();
+    if (!["REPLY", "NO_REPLY", "FLAG_HUMAN"].includes(action)) return flagHuman("Invalid OpenAI decision action.");
+    const reply = String(parsed.reply || "").trim();
+    const internalNote = String(parsed.internal_note || "").trim();
+    if (action === "REPLY" && !reply) return flagHuman("OpenAI chose REPLY but returned an empty reply.");
+    if (action !== "REPLY") return { action, reply: "", internal_note: internalNote || reasonForAction(action) };
+    return { action, reply, internal_note: internalNote };
+  } catch {
+    return flagHuman("OpenAI decision JSON could not be parsed.");
+  }
+}
+
+function flagHuman(reason) {
+  return { action: "FLAG_HUMAN", reply: "", internal_note: reason };
+}
+
+function noReply(reason) {
+  return { action: "NO_REPLY", reply: "", internal_note: reason };
+}
+
+function reasonForAction(action) {
+  return action === "NO_REPLY" ? "Message does not need a reply." : "Needs human review.";
+}
+
+function statusForDecision(decision) {
+  if (decision.action === "FLAG_HUMAN") return "human-review";
+  if (decision.action === "NO_REPLY") return "no-reply";
+  return "new";
+}
+
+function draftStatusForDecision(decision) {
+  if (decision.action === "FLAG_HUMAN") return "flag-human";
+  if (decision.action === "NO_REPLY") return "no-reply";
+  return "draft";
+}
+
+function localDecision(conversation) {
+  const latest = latestInboundMessage(conversation);
+  const text = String(latest?.text || "").trim();
+  const normal = text.toLowerCase().replace(/[.!?,\s]+$/g, "");
+  if (!text) return noReply("Empty inbound message.");
+  if (/^(thanks|thank you|thx|ta|cheers|okay|ok|k|sounds good|nice one|great thanks|perfect thanks|👍|👌|🙏)$/i.test(normal)) {
+    return noReply("Short acknowledgement; no reply needed.");
+  }
+  if (text.length <= 14 && /^(yes|no|ok|okay|thanks|cheers|done|great|perfect|cool|fine|alright|👍|👌)/i.test(normal)) {
+    return noReply("Short acknowledgement; no reply needed.");
+  }
+  if (/\b(complaint|complain|angry|unhappy|disappointed|terrible|awful|poor service|not happy|warranty|guarantee|repair|broken|leaking|leak|fault|faulty|existing job|job number|invoice|payment|refund|cancel|cancellation|contract|legal|solicitor|planning permission)\b/i.test(text)) {
+    return flagHuman("Complaint, warranty, existing job, payment, legal, planning, or repair issue.");
+  }
+  if (/\b(nick|perry|adam|jayk|manager|director|boss|owner|salesperson|installer|surveyor)\b/i.test(text)) {
+    return flagHuman("Message asks for a named staff member or senior person.");
+  }
+  return null;
 }
 
 async function graphGet(env, pathAndQuery, token = env.META_PAGE_ACCESS_TOKEN) {

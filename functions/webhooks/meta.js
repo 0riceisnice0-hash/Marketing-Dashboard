@@ -40,10 +40,10 @@ async function receiveMetaWebhook(request, env) {
 
     await addMessage(env, conversation.id, "inbound", incoming.text, incoming.externalId, incoming.createdAt, incoming.raw);
     const updated = await conversationWithMessages(env, conversation.id);
-    const draft = await safeGenerateDraft(env, updated);
+    const decision = await safeGenerateDecision(env, updated);
     await env.DB.prepare(
-      "UPDATE fenster_conversations SET status = ?, draft = ?, draft_status = ?, hidden_until_message_id = '', hidden_at = '', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind("new", draft, "draft", conversation.id).run();
+      "UPDATE fenster_conversations SET status = ?, draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, hidden_until_message_id = '', hidden_at = '', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(statusForDecision(decision), decision.reply, draftStatusForDecision(decision), decision.action, decision.internal_note, conversation.id).run();
     received += 1;
   }
 
@@ -122,16 +122,18 @@ async function conversationWithMessages(env, id) {
   return { ...conversation, messages: rows.results || [] };
 }
 
-async function safeGenerateDraft(env, conversation) {
+async function safeGenerateDecision(env, conversation) {
   try {
-    return await generateDraft(env, conversation);
+    return await generateDecision(env, conversation);
   } catch (error) {
-    return `[Draft unavailable: ${error.message}. Check the bot settings, then generate again.]`;
+    return flagHuman(`Decision failed: ${error.message}`);
   }
 }
 
-async function generateDraft(env, conversation) {
-  if (!env.OPENAI_API_KEY) return "[Draft unavailable: OpenAI key missing. Add OPENAI_API_KEY in Cloudflare, then generate again.]";
+async function generateDecision(env, conversation) {
+  const prefilter = localDecision(conversation);
+  if (prefilter) return prefilter;
+  if (!env.OPENAI_API_KEY) return flagHuman("OpenAI key missing. Human review needed.");
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -148,7 +150,7 @@ async function generateDraft(env, conversation) {
         })),
         {
           role: "user",
-          content: "Draft the next Fenster Glazing reply to the latest inbound customer message. Use earlier messages only as context."
+          content: "Return the JSON decision object for the latest inbound customer message. Return valid JSON only."
         }
       ],
       text: { verbosity: "low" }
@@ -156,7 +158,7 @@ async function generateDraft(env, conversation) {
   });
   if (!response.ok) throw new Error(`OpenAI error ${response.status}`);
   const data = await response.json();
-  return extractOpenAiText(data) || "[Draft unavailable: OpenAI returned no text. Try again.]";
+  return normaliseDecision(extractOpenAiText(data));
 }
 
 function extractOpenAiText(data) {
@@ -174,6 +176,19 @@ function extractOpenAiText(data) {
 function fensterInstructions() {
   return `You are the customer enquiry assistant for Fenster Glazing.
 
+Your job is to decide whether an incoming Facebook or Instagram message should receive an automatic reply, be ignored, or be flagged for a human.
+
+Return valid JSON only with exactly these keys: action, reply, internal_note.
+
+Allowed actions:
+REPLY: normal customer enquiry, quote request, product question, appointment request, showroom question, pricing question, or general sales conversation.
+NO_REPLY: thanks, thank you, okay, cheers, sounds good, thumbs-up style messages, short acknowledgements ending the conversation, duplicate messages, or automated spam with no useful enquiry.
+FLAG_HUMAN: complaint, angry customer, warranty issue, existing job issue, supplier/trade message, message asking for a specific person/director/boss/manager/Nick/Perry/Adam/Jayk/named staff member, legal/planning/payment/invoice/refund/cancellation/contract issue, anything unclear or risky, internal/boss/team messages, sensitive personal situations, or anything outside Fenster Glazing's normal products and services.
+
+For REPLY, set reply to the customer-facing reply and internal_note to an empty string unless there is something useful for the team.
+For NO_REPLY, set reply to an empty string and internal_note to the reason.
+For FLAG_HUMAN, set reply to an empty string and internal_note to what the team should check.
+
 Fenster Glazing supplies and installs high-quality windows and doors for residential and commercial customers. The company is based at 97-98 Alston Drive, Bradwell Abbey, Milton Keynes, Buckinghamshire, MK13 9HF. Phone: 01908 429200. Email: info@fensterglazing.com.
 
 Fenster Glazing works mainly across Milton Keynes, Northampton, Bedfordshire, Buckinghamshire, Ampthill, Toddington, Leighton Buzzard and surrounding areas. Commercial projects may be handled more widely across the UK.
@@ -186,9 +201,72 @@ For new enquiries, collect name, phone, email, postcode or town, product wanted,
 
 If asked for a price, say: "The quickest way to get an accurate starting price is to use our Instant Pricing Tool, or I can take a few details and ask the team to come back to you."
 
-Never offer legal planning advice as fact. Never promise an exact fitting date. Never diagnose repair issues from a message alone. Never mention being an AI unless asked.
+Never offer legal planning advice as fact. Never promise an exact fitting date. Never diagnose repair issues from a message alone. Never mention being an AI unless asked. Never handle complaints, warranty issues, invoices, refunds, cancellations, existing job problems, or messages for named staff automatically.
 
-Return only the exact reply text to send.`;
+Return valid JSON only.`;
+}
+
+function normaliseDecision(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    const action = String(parsed.action || "").trim().toUpperCase();
+    if (!["REPLY", "NO_REPLY", "FLAG_HUMAN"].includes(action)) return flagHuman("Invalid OpenAI decision action.");
+    const reply = String(parsed.reply || "").trim();
+    const internalNote = String(parsed.internal_note || "").trim();
+    if (action === "REPLY" && !reply) return flagHuman("OpenAI chose REPLY but returned an empty reply.");
+    if (action !== "REPLY") return { action, reply: "", internal_note: internalNote || reasonForAction(action) };
+    return { action, reply, internal_note: internalNote };
+  } catch {
+    return flagHuman("OpenAI decision JSON could not be parsed.");
+  }
+}
+
+function flagHuman(reason) {
+  return { action: "FLAG_HUMAN", reply: "", internal_note: reason };
+}
+
+function noReply(reason) {
+  return { action: "NO_REPLY", reply: "", internal_note: reason };
+}
+
+function reasonForAction(action) {
+  return action === "NO_REPLY" ? "Message does not need a reply." : "Needs human review.";
+}
+
+function statusForDecision(decision) {
+  if (decision.action === "FLAG_HUMAN") return "human-review";
+  if (decision.action === "NO_REPLY") return "no-reply";
+  return "new";
+}
+
+function draftStatusForDecision(decision) {
+  if (decision.action === "FLAG_HUMAN") return "flag-human";
+  if (decision.action === "NO_REPLY") return "no-reply";
+  return "draft";
+}
+
+function latestInboundMessage(conversation) {
+  return [...(conversation.messages || [])].reverse().find((message) => message.direction === "inbound");
+}
+
+function localDecision(conversation) {
+  const latest = latestInboundMessage(conversation);
+  const text = String(latest?.text || "").trim();
+  const normal = text.toLowerCase().replace(/[.!?,\s]+$/g, "");
+  if (!text) return noReply("Empty inbound message.");
+  if (/^(thanks|thank you|thx|ta|cheers|okay|ok|k|sounds good|nice one|great thanks|perfect thanks|👍|👌|🙏)$/i.test(normal)) {
+    return noReply("Short acknowledgement; no reply needed.");
+  }
+  if (text.length <= 14 && /^(yes|no|ok|okay|thanks|cheers|done|great|perfect|cool|fine|alright|👍|👌)/i.test(normal)) {
+    return noReply("Short acknowledgement; no reply needed.");
+  }
+  if (/\b(complaint|complain|angry|unhappy|disappointed|terrible|awful|poor service|not happy|warranty|guarantee|repair|broken|leaking|leak|fault|faulty|existing job|job number|invoice|payment|refund|cancel|cancellation|contract|legal|solicitor|planning permission)\b/i.test(text)) {
+    return flagHuman("Complaint, warranty, existing job, payment, legal, planning, or repair issue.");
+  }
+  if (/\b(nick|perry|adam|jayk|manager|director|boss|owner|salesperson|installer|surveyor)\b/i.test(text)) {
+    return flagHuman("Message asks for a named staff member or senior person.");
+  }
+  return null;
 }
 
 async function recordEvent(env, type, detail = {}) {

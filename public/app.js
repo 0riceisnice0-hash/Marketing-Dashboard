@@ -657,6 +657,7 @@ function renderFenster() {
   const visible = visibleFensterConversations();
   const awaiting = conversations.filter((item) => latestFensterMessageIsInbound(item) && !isFensterHidden(item)).length;
   const drafts = conversations.filter((item) => item.draft_status === "draft" && latestFensterMessageIsInbound(item)).length;
+  const human = conversations.filter((item) => item.decision_action === "FLAG_HUMAN" && latestFensterMessageIsInbound(item)).length;
   const hidden = conversations.filter(isFensterHidden).length;
 
   if (!selectedFensterConversationId || !visible.some((item) => item.id === selectedFensterConversationId)) {
@@ -668,6 +669,7 @@ function renderFenster() {
       ${fensterMetric(conversations.length, "Facebook threads")}
       ${fensterMetric(awaiting, "Awaiting reply")}
       ${fensterMetric(drafts, "Drafts ready")}
+      ${fensterMetric(human, "Needs human")}
       ${fensterMetric(hidden, "Hidden")}
       ${fensterMetric(fensterState.config.openAi ? "Connected" : "Missing", "OpenAI")}
       ${fensterMetric(fensterState.config.meta ? "Connected" : "No token", "Meta")}
@@ -744,7 +746,7 @@ function renderFensterThread(conversation) {
   const last = conversation.messages?.at(-1);
   const active = conversation.id === selectedFensterConversationId ? "active" : "";
   const label = latestFensterMessageIsInbound(conversation)
-    ? isFensterNewEnquiry(conversation) ? "New enquiry" : "Awaiting reply"
+    ? conversation.decision_action === "FLAG_HUMAN" ? "Needs human" : conversation.decision_action === "NO_REPLY" ? "No reply" : isFensterNewEnquiry(conversation) ? "New enquiry" : "Awaiting reply"
     : "Replied";
   return `
     <button class="fenster-thread ${active}" onclick="window.dashboardFensterSelect('${conversation.id}')">
@@ -762,8 +764,10 @@ function renderFensterDetail(conversation) {
   if (!conversation) return `<div class="detail-empty">Select a conversation.</div>`;
   const draftUnavailable = (conversation.draft || "").startsWith("[Draft unavailable:");
   const canGenerate = latestFensterMessageIsInbound(conversation);
-  const canSend = canGenerate && conversation.draft && !draftUnavailable;
+  const canSend = canGenerate && conversation.decision_action === "REPLY" && conversation.draft && !draftUnavailable;
   const canHide = canGenerate && fensterTab !== "all";
+  const decision = conversation.decision_action || "PENDING";
+  const decisionClass = decision === "FLAG_HUMAN" ? "danger" : decision === "NO_REPLY" ? "quiet" : "ready";
 
   return `
     <div class="detail-head">
@@ -772,6 +776,10 @@ function renderFensterDetail(conversation) {
         <h3>${escapeHtml(conversation.display_name)}</h3>
       </div>
       <span class="meta">${formatDateTime(conversation.updated_at)}</span>
+    </div>
+    <div class="decision-banner ${decisionClass}">
+      <strong>${escapeHtml(decisionLabel(decision))}</strong>
+      <span>${escapeHtml(conversation.internal_note || decisionHelp(decision))}</span>
     </div>
     <div class="message-stream">
       ${(conversation.messages || []).map((message) => `
@@ -789,12 +797,31 @@ function renderFensterDetail(conversation) {
       <div class="draft-actions">
         <button onclick="window.dashboardFensterGenerate()" ${canGenerate ? "" : "disabled"}>Generate draft</button>
         <button onclick="window.dashboardFensterSaveDraft()">Save edit</button>
-        <button class="primary-button" onclick="window.dashboardFensterSend()" ${canSend ? "" : "disabled"}>Send reply</button>
+        <button class="primary-button" onclick="window.dashboardFensterSend()" ${canSend ? "" : "disabled"}>Approve and send</button>
+        <button onclick="window.dashboardFensterReject()">Reject decision</button>
         <button onclick="window.dashboardFensterHide()" ${canHide ? "" : "disabled"}>Hide</button>
         <span class="meta">${escapeHtml(conversation.draft_status)}</span>
       </div>
     </div>
   `;
+}
+
+function decisionLabel(decision) {
+  return {
+    REPLY: "Decision: reply",
+    NO_REPLY: "Decision: no reply",
+    FLAG_HUMAN: "Decision: flag human",
+    PENDING: "Decision pending"
+  }[decision] || `Decision: ${decision}`;
+}
+
+function decisionHelp(decision) {
+  return {
+    REPLY: "Review the suggested reply, then approve and send if it is right.",
+    NO_REPLY: "The bot thinks this should be logged without sending anything.",
+    FLAG_HUMAN: "This needs a real person before any response is sent.",
+    PENDING: "Generate a decision before sending."
+  }[decision] || "";
 }
 
 function setFensterStatus(text) {
@@ -867,6 +894,17 @@ async function fensterSend() {
       confirm: `SEND:${selectedFensterConversationId}`
     }
   }, "Sending reply...");
+}
+
+async function fensterReject() {
+  if (!selectedFensterConversationId) return;
+  const conversation = selectedFensterConversation();
+  const note = prompt(`Why reject the bot decision for ${conversation?.display_name || "this conversation"}?`, "Needs human review.");
+  if (note === null) return;
+  await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/reject`, {
+    method: "POST",
+    body: { note }
+  }, "Rejecting decision...");
 }
 
 function formatDate(value) {
@@ -1188,4 +1226,5 @@ window.dashboardFensterSelect = fensterSelect;
 window.dashboardFensterGenerate = fensterGenerate;
 window.dashboardFensterSaveDraft = fensterSaveDraft;
 window.dashboardFensterSend = fensterSend;
+window.dashboardFensterReject = fensterReject;
 window.dashboardFensterHide = fensterHide;

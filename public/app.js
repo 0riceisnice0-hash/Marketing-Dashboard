@@ -1,25 +1,21 @@
 const tabs = [
-  { id: "dashboard", label: "Dashboard", icon: "D" },
-  { id: "tickets", label: "Tickets", icon: "T" },
-  { id: "todays-plan", label: "Today's Plan", icon: "N" },
-  { id: "action-plan", label: "Action Plan", icon: "P" },
+  { id: "dashboard", label: "Command Centre", icon: "C" },
+  { id: "projects", label: "Projects", icon: "P" },
+  { id: "inbox", label: "Inbox", icon: "I" },
+  { id: "plan", label: "Plan", icon: "N" },
+  { id: "achievements", label: "Achievements", icon: "A" },
   { id: "social", label: "Social Media", icon: "S" },
-  { id: "ideas", label: "Ideas", icon: "I" },
-  { id: "roadmap", label: "Roadmap", icon: "R" },
-  { id: "website", label: "Website", icon: "W" },
-  { id: "tools", label: "Tools", icon: "A" }
+  { id: "tools", label: "Tools", icon: "T" }
 ];
 
 const viewCopy = {
-  dashboard: "What needs attention, what is waiting, and what shipped recently.",
-  tickets: "Requests from the team, moved through a clear status board.",
-  "todays-plan": "A shared plan for the day, with updates, done states, and carry-forward notes.",
-  "action-plan": "The extracted Fenster marketing plan, grouped by effort and progress.",
-  social: "Content ideas, scheduled posts, Stories, Reels, and social follow-up in one place.",
-  ideas: "A holding area for good ideas before they interrupt the actual work.",
-  roadmap: "Today, this week, and later, without the noise.",
-  website: "Website changes, launch notes, and visible progress for the team.",
-  tools: "The future tool drawer for automations, Meta work, reports, and templates."
+  dashboard: "What matters now, what is blocked, and what has recently shipped.",
+  projects: "The real work, organised as projects instead of database tables.",
+  inbox: "New requests, rough ideas, and work that has not become a project yet.",
+  plan: "Today, this week, and the wider marketing action plan in one focused place.",
+  achievements: "Evidence of delivered value for reviews, probation, and future check-ins.",
+  social: "Social planning, guidelines, and content movement without mixing it into ideas.",
+  tools: "Live operational tools, starting with the Fenster Meta Bot."
 };
 
 const actionPlan = [
@@ -364,17 +360,15 @@ function render() {
 
   const renderers = {
     dashboard: renderDashboard,
-    tickets: () => renderBoard("tickets", "status", ["New", "In Progress", "Waiting on Someone", "Parked", "Done"]),
-    "todays-plan": renderTodaysPlan,
-    "action-plan": renderActionPlan,
+    projects: renderProjects,
+    inbox: renderInbox,
+    plan: renderPlan,
+    achievements: renderAchievements,
     social: renderSocial,
-    ideas: () => renderBoard("ideas", "status", ["Inbox", "Considering", "Approved", "Parked", "Done"]),
-    roadmap: renderRoadmap,
-    website: renderWebsite,
     tools: renderTools
   };
 
-  renderers[current]();
+  (renderers[current] || renderDashboard)();
   wireBoardDragDrop();
 }
 
@@ -607,50 +601,449 @@ async function patchActionPlanItem(item, patch, options = {}) {
   return saved;
 }
 
+function allProjects() {
+  return [
+    ...(state.tickets || []).map((item) => projectFromRecord("tickets", item, {
+      type: item.category || "Request",
+      owner: item.owner || "Zac",
+      requester: item.requester || "",
+      detail: item.detail || "",
+      urgent: ["Urgent", "Boss panic mode"].includes(item.priority),
+      stage: stageFromTicket(item.status)
+    })),
+    ...(state.website_updates || []).map((item) => projectFromRecord("website_updates", item, {
+      type: "Website",
+      owner: "Zac",
+      detail: item.detail || "",
+      stage: stageFromWebsite(item.status)
+    })),
+    ...(state.social_posts || []).map((item) => projectFromRecord("social_posts", item, {
+      type: item.content_type || "Social",
+      owner: item.owner || "Zac",
+      detail: item.notes || "",
+      stage: stageFromSocial(item.status)
+    })),
+    ...(state.content_requests || []).map((item) => projectFromRecord("content_requests", item, {
+      type: item.asset_type || "Content",
+      owner: item.requester || "Team",
+      requester: item.requester || "",
+      detail: item.detail || "",
+      stage: stageFromContent(item.status)
+    })),
+    ...flattenedActionPlan().map((item) => ({
+      id: item.customId || actionPlanKey(item),
+      table: "action_plan_items",
+      recordId: item.customId || "",
+      title: item.title,
+      detail: item.detail || "",
+      type: item.section || "Action plan",
+      owner: "Zac",
+      requester: "",
+      source: "Action plan",
+      status: item.status || "Active",
+      stage: item.status === "Done" ? "Done" : item.status === "Parked" ? "Parked" : "Active",
+      urgent: item.effort === "complex",
+      updated: "",
+      actionKey: actionPlanKey(item),
+      raw: item
+    })),
+    ...(state.ideas || []).map((item) => projectFromRecord("ideas", item, {
+      type: "Idea",
+      owner: item.author || "Team",
+      requester: item.author || "",
+      detail: item.detail || "",
+      urgent: item.impact === "High",
+      stage: stageFromIdea(item.status)
+    })),
+    ...(state.tasks || []).filter((item) => !Number(item.done)).map((item) => projectFromRecord("tasks", item, {
+      type: "Task",
+      owner: item.owner || "Zac",
+      detail: item.due_date ? `Due ${item.due_date}` : "",
+      stage: item.lane === "Later" ? "Inbox" : "Active"
+    }))
+  ].sort((a, b) => projectSort(a) - projectSort(b));
+}
+
+function projectFromRecord(table, item, extras = {}) {
+  return {
+    id: `${table}:${item.id}`,
+    table,
+    recordId: item.id,
+    title: item.title || "Untitled",
+    detail: extras.detail || item.detail || "",
+    type: extras.type || config[table]?.title || "Project",
+    owner: extras.owner || item.owner || "Zac",
+    requester: extras.requester || "",
+    source: config[table]?.title || table,
+    status: item.status || item.lane || "",
+    stage: extras.stage || "Active",
+    urgent: Boolean(extras.urgent),
+    updated: item.updated_at || item.created_at || item.release_date || item.scheduled_for || "",
+    raw: item
+  };
+}
+
+function projectSort(project) {
+  const stageWeight = { Inbox: 0, Waiting: 1, Active: 2, Parked: 3, Done: 4 };
+  return (stageWeight[project.stage] || 5) - (project.urgent ? 0.5 : 0);
+}
+
+function stageFromTicket(status) {
+  return {
+    New: "Inbox",
+    "In Progress": "Active",
+    "Waiting on Someone": "Waiting",
+    Parked: "Parked",
+    Done: "Done"
+  }[status] || "Active";
+}
+
+function stageFromWebsite(status) {
+  return {
+    Plan: "Inbox",
+    Planned: "Inbox",
+    Active: "Active",
+    "In Progress": "Active",
+    Blocked: "Waiting",
+    Parked: "Parked",
+    Done: "Done",
+    Live: "Done"
+  }[status] || "Active";
+}
+
+function stageFromSocial(status) {
+  return {
+    Idea: "Inbox",
+    Planned: "Active",
+    Scheduled: "Active",
+    Posted: "Done",
+    Parked: "Parked"
+  }[status] || "Active";
+}
+
+function stageFromIdea(status) {
+  return {
+    Inbox: "Inbox",
+    Considering: "Active",
+    Approved: "Active",
+    Parked: "Parked",
+    Done: "Done"
+  }[status] || "Inbox";
+}
+
+function stageFromContent(status) {
+  return {
+    Needed: "Inbox",
+    Requested: "Waiting",
+    Received: "Active",
+    Used: "Done"
+  }[status] || "Inbox";
+}
+
+function statusForProjectStage(table, stage) {
+  const maps = {
+    tickets: { Inbox: "New", Active: "In Progress", Waiting: "Waiting on Someone", Parked: "Parked", Done: "Done" },
+    website_updates: { Inbox: "Plan", Active: "Active", Waiting: "Parked", Parked: "Parked", Done: "Done" },
+    social_posts: { Inbox: "Idea", Active: "Planned", Waiting: "Scheduled", Parked: "Parked", Done: "Posted" },
+    ideas: { Inbox: "Inbox", Active: "Considering", Waiting: "Considering", Parked: "Parked", Done: "Done" },
+    content_requests: { Inbox: "Needed", Active: "Received", Waiting: "Requested", Parked: "Requested", Done: "Used" },
+    action_plan_items: { Inbox: "Active", Active: "Active", Waiting: "Parked", Parked: "Parked", Done: "Done" }
+  };
+  return maps[table]?.[stage] || stage;
+}
+
+function projectCards(projects) {
+  if (!projects.length) return `<p class="empty">Nothing here.</p>`;
+  return projects.map(projectCard).join("");
+}
+
+function projectCard(project) {
+  const detail = project.detail ? `<p>${escapeHtml(project.detail)}</p>` : "";
+  return `
+    <article class="project-card card" draggable="true" data-table="${project.table}" data-id="${project.recordId}" data-action-key="${escapeHtml(project.actionKey || "")}">
+      <header>
+        <div>
+          <span class="project-source">${escapeHtml(project.source)}</span>
+          <h4>${escapeHtml(project.title)}</h4>
+        </div>
+        ${project.urgent ? `<span class="pill priority-urgent">Urgent</span>` : `<span class="pill status-${slug(project.stage)}">${escapeHtml(project.stage)}</span>`}
+      </header>
+      ${detail}
+      <div class="meta">
+        <span class="pill"><span class="meta-label">Type</span>${escapeHtml(project.type)}</span>
+        ${project.owner ? `<span class="pill"><span class="meta-label">Owner</span>${escapeHtml(project.owner)}</span>` : ""}
+        ${project.requester ? `<span class="pill"><span class="meta-label">From</span>${escapeHtml(project.requester)}</span>` : ""}
+      </div>
+      <div class="actions">
+        ${project.recordId ? noteAction(project.table, { id: project.recordId }) : ""}
+        ${project.table === "action_plan_items" ? `<button onclick="window.dashboardActionToTask('${encodeActionItem(project.raw)}')">Set as task</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function planItems() {
+  const today = (state.todays_plan || []).map((item) => ({
+    table: "todays_plan",
+    id: item.id,
+    title: item.title,
+    detail: item.notes || "",
+    status: item.status || "Planned",
+    owner: item.owner || "Zac",
+    when: item.status === "Carry on tomorrow" ? "This week" : "Today"
+  }));
+  const tasks = (state.tasks || []).filter((item) => !Number(item.done)).map((item) => ({
+    table: "tasks",
+    id: item.id,
+    title: item.title,
+    detail: item.due_date ? `Due ${item.due_date}` : "",
+    status: item.lane || "Today",
+    owner: item.owner || "Zac",
+    when: item.lane === "Today" ? "Today" : "This week"
+  }));
+  return [...today, ...tasks];
+}
+
+function renderPlanRow(item) {
+  return `
+    <article class="compact-row">
+      <div>
+        <strong>${escapeHtml(item.title || "Untitled")}</strong>
+        <span>${escapeHtml(item.detail || item.owner || "")}</span>
+      </div>
+      <span class="pill status-${slug(item.status)}">${escapeHtml(item.status)}</span>
+    </article>
+  `;
+}
+
+function renderActionRow(item) {
+  return `
+    <article class="action-row">
+      <div>
+        <strong>${escapeHtml(item.title)}</strong>
+        <p>${escapeHtml(item.detail || "")}</p>
+      </div>
+      <div class="meta">
+        <span class="pill status-${slug(item.effort)}">${effortLabel(item.effort)}</span>
+        <span class="pill status-${slug(item.status)}">${escapeHtml(item.status || "Active")}</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderSourceRow(kind, title, person, category) {
+  return `
+    <article class="compact-row">
+      <div>
+        <strong>${escapeHtml(title || "Untitled")}</strong>
+        <span>${escapeHtml(kind)} from ${escapeHtml(person || "team")}</span>
+      </div>
+      <span class="pill">${escapeHtml(category || kind)}</span>
+    </article>
+  `;
+}
+
+function achievementFeed() {
+  const shipped = (state.changelog || []).map((item) => ({
+    title: item.title,
+    detail: item.detail || "",
+    area: item.area || "Marketing",
+    date: item.shipped_at || "",
+    kind: "Logged"
+  }));
+  const completedProjects = allProjects()
+    .filter((project) => project.stage === "Done")
+    .map((project) => ({
+      title: project.title,
+      detail: project.detail || `Completed ${project.type.toLowerCase()} project.`,
+      area: project.type || "Project",
+      date: project.updated || "",
+      kind: "Completed"
+    }));
+  return [...shipped, ...completedProjects].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+}
+
+function renderAchievement(item) {
+  return `
+    <article class="achievement">
+      <time>${escapeHtml(formatShortDate(item.date))}</time>
+      <div>
+        <strong>${escapeHtml(item.title || "Untitled achievement")}</strong>
+        <p>${escapeHtml(item.detail || "")}</p>
+        <span class="pill">${escapeHtml(item.area || item.kind || "Outcome")}</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderReviewSummary(feed) {
+  const top = feed.slice(0, 4);
+  return `
+    <div class="review-summary">
+      <p>The useful story is outcomes delivered, not task volume. Use this page to keep a plain-English record of projects shipped, improvements made, and systems created.</p>
+      ${top.length ? `<ul>${top.map((item) => `<li>${escapeHtml(item.title)}</li>`).join("")}</ul>` : `<p class="empty">Log the first achievement to start building review evidence.</p>`}
+    </div>
+  `;
+}
+
+function daysAgo(value) {
+  if (!value) return 9999;
+  return Math.floor((Date.now() - new Date(value).getTime()) / 86400000);
+}
+
+function formatShortDate(value) {
+  if (!value) return "No date";
+  return new Date(value).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+}
+
 function renderDashboard() {
-  const openTickets = (state.tickets || []).filter((item) => !["Done", "Parked"].includes(item.status));
-  const closedTickets = (state.tickets || []).filter((item) => item.status === "Done");
-  const parkedTickets = (state.tickets || []).filter((item) => item.status === "Parked");
-  const urgent = openTickets.filter((item) => ["Urgent", "Boss panic mode"].includes(item.priority));
-  const websiteProgress = (state.website_updates || []).length;
-  const waiting = openTickets.filter((ticket) => ticket.status === "Waiting on Someone");
-  const today = (state.tasks || []).filter((task) => task.lane === "Today" && !Number(task.done));
+  const projects = allProjects();
+  const active = projects.filter((project) => project.stage === "Active");
+  const waiting = projects.filter((project) => project.stage === "Waiting");
+  const urgent = projects.filter((project) => project.urgent && project.stage !== "Done");
+  const completed = projects.filter((project) => project.stage === "Done");
+  const today = planItems().filter((item) => item.when === "Today");
+  const recentWins = achievementFeed().slice(0, 5);
 
   view.innerHTML = `
-    <div class="grid stats">
-      ${stat("Open tickets", openTickets.length, "Requests not done yet", "#215ed3")}
-      ${stat("Closed tickets", closedTickets.length, "Finished and out of the way", "#12825a")}
-      ${stat("Parked tickets", parkedTickets.length, "Paused without cluttering active work", "#6c7785")}
+    <section class="command-hero">
+      <div>
+        <p class="eyebrow">Fenster Marketing OS</p>
+        <h3>Command centre</h3>
+        <p>Focus on the work that proves value: active projects, blockers, urgent requests, and delivered outcomes.</p>
+      </div>
+      <div class="hero-actions">
+        <button class="primary-button" onclick="window.dashboardOpen('tickets')">New request</button>
+        <button onclick="window.dashboardOpen('changelog')">Log achievement</button>
+      </div>
+    </section>
+    <div class="grid stats command-stats">
+      ${stat("Active projects", active.length, "Work currently moving", "#1e6f92")}
+      ${stat("Waiting or blocked", waiting.length, "Needs another person or decision", "#a35e00")}
       ${stat("Urgent", urgent.length, "Needs eyes first", "#c23a34")}
+      ${stat("Delivered", completed.length, "Completed project evidence", "#12825a")}
     </div>
-    <div class="grid two" style="margin-top:16px">
-      <section class="panel">
-        ${panelHeader("Open ticket queue", "The main work pile. Keep this moving and the whole system works.", openTickets.length)}
-        <div class="card-list dashboard-list">${cards(openTickets.slice(0, 8), "tickets")}</div>
+    <div class="grid command-layout">
+      <section class="panel focus-panel">
+        ${panelHeader("Focus now", "The smallest useful view of what needs attention.", urgent.length + waiting.length + active.length)}
+        <div class="focus-stack">
+          ${projectCards([...urgent, ...waiting, ...active].slice(0, 6))}
+        </div>
       </section>
       <section class="panel">
-        ${panelHeader("Closed tickets", "Completed requests, ready for tomorrow's proof-of-progress chat.", closedTickets.length)}
-        <div class="card-list dashboard-list">${cards(closedTickets.slice(0, 8), "tickets")}</div>
+        ${panelHeader("Today", "A clear day list, not another database view.", today.length)}
+        <div class="compact-list">${today.length ? today.slice(0, 8).map(renderPlanRow).join("") : `<p class="empty">Nothing planned for today.</p>`}</div>
       </section>
-    </div>
-    <div class="grid two" style="margin-top:16px">
-      <section class="panel">
-        ${panelHeader("Waiting on someone", "Chase these before they quietly stall.", waiting.length)}
-        <div class="card-list dashboard-list">${cards(waiting.slice(0, 8), "tickets")}</div>
-      </section>
-      <section class="panel">
-        ${panelHeader("Today", "Small internal work list, separate from team ticket requests.", today.length)}
-        <div class="card-list dashboard-list">${cards(today.slice(0, 6), "tasks")}</div>
+      <section class="panel evidence-panel">
+        ${panelHeader("Recent evidence", "Useful proof for reviews and weekly check-ins.", recentWins.length)}
+        <div class="timeline">${recentWins.length ? recentWins.map(renderAchievement).join("") : `<p class="empty">No achievements logged yet. Start with one meaningful outcome.</p>`}</div>
       </section>
     </div>
-    <div class="grid two" style="margin-top:16px">
+  `;
+}
+
+function renderProjects() {
+  const projects = allProjects();
+  const stages = ["Active", "Waiting", "Parked", "Done"];
+  view.innerHTML = `
+    <div class="board-tools v2-tools">
+      <p><strong>Projects</strong><br>Everything meaningful lives here, whether it started as a ticket, website change, idea, social post, or action-plan item.</p>
+      <div class="board-actions">
+        <button onclick="window.dashboardOpen('ideas')">Capture idea</button>
+        <button onclick="window.dashboardOpen('website_updates')">Website project</button>
+        <button class="primary-button" onclick="window.dashboardOpen('tickets')">New request</button>
+      </div>
+    </div>
+    <div class="project-board">
+      ${stages.map((stage) => `
+        <section class="project-lane" data-project-stage="${stage}">
+          ${columnHeader(stage, projects.filter((project) => project.stage === stage).length)}
+          <div class="project-list">${projectCards(projects.filter((project) => project.stage === stage))}</div>
+        </section>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderInbox() {
+  const inbox = allProjects().filter((project) => project.stage === "Inbox");
+  const rawRequests = (state.tickets || []).filter((item) => item.status === "New");
+  const rawIdeas = (state.ideas || []).filter((item) => item.status === "Inbox");
+  view.innerHTML = `
+    <div class="board-tools v2-tools">
+      <p><strong>Inbox</strong><br>Incoming requests and loose ideas. Decide quickly: start it, park it, or log why it matters.</p>
+      <div class="board-actions">
+        <button onclick="window.dashboardOpen('ideas')">New idea</button>
+        <button class="primary-button" onclick="window.dashboardOpen('tickets')">New request</button>
+      </div>
+    </div>
+    <div class="grid two">
       <section class="panel">
-        ${panelHeader("Website progress", "Dev site updates and current website movement.", websiteProgress)}
-        <div class="card-list">${cards((state.website_updates || []).filter((item) => item.status !== "Done").slice(0, 5), "website_updates")}</div>
+        ${panelHeader("Triage queue", "Items that have not become active work yet.", inbox.length)}
+        <div class="focus-stack">${projectCards(inbox)}</div>
       </section>
       <section class="panel">
-        ${panelHeader("Social queue", "Content ideas and posts that still need movement.", (state.social_posts || []).filter((item) => item.status !== "Posted").length)}
-        <div class="card-list dashboard-list">${cards((state.social_posts || []).filter((item) => item.status !== "Posted").slice(0, 6), "social_posts")}</div>
+        ${panelHeader("Where it came from", "Useful context without opening separate table pages.", rawRequests.length + rawIdeas.length)}
+        <div class="compact-list">
+          ${rawRequests.slice(0, 5).map((item) => renderSourceRow("Request", item.title, item.requester || "Team", item.category)).join("")}
+          ${rawIdeas.slice(0, 5).map((item) => renderSourceRow("Idea", item.title, item.author || "Team", item.impact)).join("")}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderPlan() {
+  const items = planItems();
+  const actionItems = flattenedActionPlan().filter((item) => item.status !== "Deleted");
+  view.innerHTML = `
+    <div class="board-tools v2-tools">
+      <p><strong>Plan</strong><br>Daily execution and the wider marketing plan in one place, with less scrolling and fewer duplicate boards.</p>
+      <div class="board-actions">
+        <button onclick="window.dashboardOpen('action_plan_items')">Add action</button>
+        <button class="primary-button" onclick="window.dashboardOpen('todays_plan')">Add today</button>
+      </div>
+    </div>
+    <div class="grid two plan-v2">
+      <section class="panel">
+        ${panelHeader("Today", "Small enough to actually use.", items.filter((item) => item.when === "Today").length)}
+        <div class="compact-list">${items.filter((item) => item.when === "Today").map(renderPlanRow).join("") || `<p class="empty">No plan items for today.</p>`}</div>
+      </section>
+      <section class="panel">
+        ${panelHeader("This week", "Commitments and carry-forward work.", items.filter((item) => item.when !== "Today").length)}
+        <div class="compact-list">${items.filter((item) => item.when !== "Today").slice(0, 12).map(renderPlanRow).join("") || `<p class="empty">No weekly work queued.</p>`}</div>
+      </section>
+    </div>
+    <section class="panel action-library">
+      ${panelHeader("Marketing action library", "The useful thinking from the old Action Plan, condensed into a scan-friendly list.", actionItems.length)}
+      <div class="action-list">${actionItems.map(renderActionRow).join("")}</div>
+    </section>
+  `;
+}
+
+function renderAchievements() {
+  const feed = achievementFeed();
+  const thisWeek = feed.filter((item) => daysAgo(item.date) <= 7);
+  const thisMonth = feed.filter((item) => daysAgo(item.date) <= 31);
+  view.innerHTML = `
+    <div class="board-tools v2-tools">
+      <p><strong>Achievements</strong><br>Outcome evidence for probation reviews, weekly updates, and future performance conversations.</p>
+      <button class="primary-button" onclick="window.dashboardOpen('changelog')">Log achievement</button>
+    </div>
+    <div class="grid stats">
+      ${stat("This week", thisWeek.length, "Logged outcomes and shipped work", "#1e6f92")}
+      ${stat("This month", thisMonth.length, "Evidence gathered", "#7057c8")}
+      ${stat("Completed projects", allProjects().filter((project) => project.stage === "Done").length, "Delivered project work", "#12825a")}
+      ${stat("Total evidence", feed.length, "Since records began", "#1e6f92")}
+    </div>
+    <div class="grid two achievements-layout">
+      <section class="panel">
+        ${panelHeader("Review summary", "The story you can tell without counting tiny tasks.", feed.length)}
+        ${renderReviewSummary(feed)}
+      </section>
+      <section class="panel">
+        ${panelHeader("Evidence timeline", "Newest first.", feed.length)}
+        <div class="timeline">${feed.length ? feed.map(renderAchievement).join("") : `<p class="empty">No achievements yet.</p>`}</div>
       </section>
     </div>
   `;
@@ -716,7 +1109,7 @@ function wireBoardDragDrop() {
     card.addEventListener("dragend", () => card.classList.remove("dragging"));
   });
 
-  view.querySelectorAll(".column[data-table]").forEach((column) => {
+  view.querySelectorAll(".column[data-table], .project-lane[data-project-stage]").forEach((column) => {
     column.addEventListener("dragover", (event) => {
       event.preventDefault();
       column.classList.add("drag-over");
@@ -729,10 +1122,35 @@ function wireBoardDragDrop() {
       event.preventDefault();
       column.classList.remove("drag-over");
       const payload = JSON.parse(event.dataTransfer.getData("application/json") || "{}");
+      if (column.dataset.projectStage) {
+        await patchProjectStage(payload, column.dataset.projectStage);
+        return;
+      }
       if (payload.table !== column.dataset.table) return;
       await patchBoardItem(payload, column.dataset.field, column.dataset.value);
     });
   });
+}
+
+async function patchProjectStage(payload, stage) {
+  if (payload.table === "action_plan_items") {
+    const item = flattenedActionPlan().find((entry) => actionPlanKey(entry) === payload.actionKey);
+    if (!item || item.status === statusForProjectStage(payload.table, stage)) return;
+    await patchActionPlanItem(item, { status: statusForProjectStage(payload.table, stage) });
+    return;
+  }
+  const id = Number(payload.id);
+  if (!id) return;
+  if (payload.table === "tasks") {
+    const patch = stage === "Done"
+      ? { done: 1 }
+      : { done: 0, lane: stage === "Parked" ? "Later" : stage === "Waiting" ? "This Week" : "Today" };
+    await patchRecord(payload.table, id, patch);
+    return;
+  }
+  const status = statusForProjectStage(payload.table, stage);
+  if (!status) return;
+  await patchRecord(payload.table, id, { status });
 }
 
 async function patchBoardItem(payload, field, value) {
@@ -786,19 +1204,12 @@ function renderWebsite() {
 }
 
 function renderTools() {
-  const tools = [
-    ["Coming soon", "Lead scrapers", "A place to launch or document lead collection tools."],
-    ["Coming soon", "Prompt templates", "Reusable marketing, SEO, review reply, and product copy prompts."],
-    ["Coming soon", "Reporting links", "Ads, Search Console, analytics, call tracking, and ranking dashboards."],
-    ["Coming soon", "Asset library", "Future home for R2-backed photos, videos, screenshots, and brand files."],
-    ["Coming soon", "Automation notes", "Campaign routines, weekly jobs, and checks that should become Workers later."]
-  ];
   view.innerHTML = `
     <section class="panel fenster-tool">
       <div class="panel-header">
         <div>
           <h3>Fenster Meta Bot</h3>
-          <p class="panel-subtitle">Facebook inbox, draft replies, and approval-only sending on the same Cloudflare Pages app.</p>
+          <p class="panel-subtitle">Facebook inbox, draft replies, office forwarding, and approval-only sending. This stays because it does real work.</p>
         </div>
         <div class="actions tool-actions">
           <button onclick="window.dashboardFensterSeed()">Seed demo</button>
@@ -809,7 +1220,6 @@ function renderTools() {
       <p id="fenster-status" class="result-note">Loading Fenster Meta Bot...</p>
       <div id="fenster-app" class="fenster-app"></div>
     </section>
-    <div class="tool-grid secondary-tools">${tools.map(([badge, name, text]) => `<article class="tool"><span class="tool-badge">${badge}</span><h3>${name}</h3><p>${text}</p></article>`).join("")}</div>
   `;
   loadFenster();
 }
@@ -1352,7 +1762,7 @@ function noteAction(table, item) {
 
 function noteBadge(table, id) {
   const count = state.note_counts?.[`${table}:${id}`] || 0;
-  return `<span class="note-mark ${count ? "has-notes" : ""}" aria-hidden="true">📝</span><span>${count ? `${count} note${count === 1 ? "" : "s"}` : "Notes"}</span>`;
+  return `<span class="note-mark ${count ? "has-notes" : ""}" aria-hidden="true">N</span><span>${count ? `${count} note${count === 1 ? "" : "s"}` : "Notes"}</span>`;
 }
 
 function deleteMenu(table, item, fn = "window.dashboardDeleteRecord") {

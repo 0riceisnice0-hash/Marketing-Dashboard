@@ -26,6 +26,8 @@ const projectAreas = [
   { key: "unsorted-tickets", name: "Unsorted Tickets", text: "Older requests that still need a proper project link." }
 ];
 
+const priorityOptions = ["Low", "Normal", "Urgent", "Boss panic mode"];
+
 const actionPlan = [
   {
     section: "Immediate Actions",
@@ -105,7 +107,7 @@ const config = {
     fields: [
       ["title", "Title", "text"],
       ["category", "Category", "select", ["Marketing", "Website", "Content", "Reporting", "Showroom", "Other"]],
-      ["priority", "Priority", "select", ["Low", "Normal", "Urgent", "Boss panic mode"]],
+      ["priority", "Priority", "select", priorityOptions],
       ["project_key", "Project", "select", projectOptions()],
       ["detail", "Detail", "textarea"],
       ["requester", "Requester", "hidden", "currentUser"],
@@ -120,6 +122,7 @@ const config = {
       ["title", "Title", "text"],
       ["author", "Author", "text"],
       ["impact", "Impact", "select", ["Low", "Medium", "High"]],
+      ["priority", "Priority", "select", priorityOptions],
       ["project_key", "Project", "select", projectOptions()],
       ["status", "Status", "select", ["Inbox", "Considering", "Approved", "Parked", "Done"]],
       ["detail", "Detail", "textarea"]
@@ -132,6 +135,7 @@ const config = {
       ["title", "Title", "text"],
       ["lane", "Lane", "select", ["Today", "This Week", "Later"]],
       ["owner", "Owner", "select", ["Zac", "Adam", "Nick"]],
+      ["priority", "Priority", "select", priorityOptions],
       ["project_key", "Project", "select", projectOptions()],
       ["due_date", "Due date", "date"]
     ]
@@ -142,6 +146,7 @@ const config = {
     fields: [
       ["title", "Plan item", "text"],
       ["owner", "Owner", "hidden", "currentUser"],
+      ["priority", "Priority", "select", priorityOptions],
       ["status", "Status", "select", ["Planned", "Doing", "Parked", "Done", "Carry on tomorrow"]],
       ["project_key", "Project", "select", projectOptions()],
       ["notes", "Notes / updates", "textarea"],
@@ -155,6 +160,7 @@ const config = {
       ["title", "Content idea", "text"],
       ["platform", "Platform", "select", ["Instagram", "Facebook", "TikTok", "LinkedIn", "Google Business Profile", "All channels"]],
       ["content_type", "Content type", "select", ["Post", "Story", "Reel", "Poll", "Review", "Case study", "Showroom update", "Offer"]],
+      ["priority", "Priority", "select", priorityOptions],
       ["status", "Status", "select", ["Idea", "Planned", "Scheduled", "Posted", "Parked"]],
       ["project_key", "Project", "select", projectOptions()],
       ["scheduled_for", "Scheduled for", "date"],
@@ -168,6 +174,7 @@ const config = {
     fields: [
       ["title", "Guideline title", "text"],
       ["category", "Category", "select", ["Brand voice", "Visual style", "Posting rules", "Lead handling", "Template", "Do not say", "General"]],
+      ["priority", "Priority", "select", priorityOptions],
       ["body", "Guideline / template notes", "textarea"]
     ]
   },
@@ -178,6 +185,7 @@ const config = {
       ["title", "Title", "text"],
       ["section", "Section", "select", ["Immediate Actions", "Website, Residential Foundation & SEO", "Social Media", "Print, Sales & Showroom", "AdminBase, Messaging & Long-Term Touchpoints", "Custom"]],
       ["effort", "Effort", "select", ["easy", "medium", "complex"]],
+      ["priority", "Priority", "select", priorityOptions],
       ["project_key", "Project", "select", projectOptions()],
       ["detail", "Detail", "textarea"],
       ["status", "Status", "select", ["Active", "Parked", "Done"]]
@@ -190,6 +198,7 @@ const config = {
       ["title", "Title", "text"],
       ["requester", "Requester", "text"],
       ["asset_type", "Asset type", "select", ["Photo", "Video", "Review", "Case study", "Showroom", "Product info"]],
+      ["priority", "Priority", "select", priorityOptions],
       ["deadline", "Deadline", "date"],
       ["status", "Status", "select", ["Needed", "Requested", "Received", "Used"]],
       ["project_key", "Project", "select", projectOptions()],
@@ -202,6 +211,7 @@ const config = {
     fields: [
       ["title", "Title", "text"],
       ["area", "Area", "select", ["Homepage", "Product page", "Gallery", "SEO", "Forms", "Tracking", "Changelog"]],
+      ["priority", "Priority", "select", priorityOptions],
       ["status", "Status", "select", ["Plan", "Active", "Parked", "Done"]],
       ["project_key", "Project", "select", projectOptions()],
       ["release_date", "Release date", "date"],
@@ -215,6 +225,7 @@ const config = {
       ["title", "Title", "text"],
       ["shipped_at", "Shipped at", "date"],
       ["area", "Area", "select", ["Marketing", "Website", "Content", "Tools", "Operations"]],
+      ["priority", "Priority", "select", priorityOptions],
       ["project_key", "Project", "select", projectOptions()],
       ["detail", "Detail", "textarea"]
     ]
@@ -417,9 +428,14 @@ function render() {
 }
 
 function normalizeState(next) {
+  const priorityTables = ["tickets", "ideas", "tasks", "todays_plan", "social_posts", "social_guidelines", "action_plan_items", "content_requests", "website_updates", "changelog"];
+  const normalized = { ...next };
+  for (const table of priorityTables) {
+    normalized[table] = (normalized[table] || []).map((item) => ({ priority: "Normal", ...item }));
+  }
   return {
-    ...next,
-    website_updates: (next.website_updates || []).map((item) => ({
+    ...normalized,
+    website_updates: (normalized.website_updates || []).map((item) => ({
       ...item,
       status: {
         Planned: "Plan",
@@ -492,11 +508,13 @@ function renderGuideline(item) {
         <div>
           <h4>${escapeHtml(item.title)}</h4>
           <span class="pill">${escapeHtml(item.category || "General")}</span>
+          ${priorityPill(item.priority || "Normal")}
         </div>
         ${isSaved ? `
           <details class="card-menu brief-menu">
             <summary aria-label="More actions">...</summary>
             <div class="menu-popover">
+              ${prioritySelect({ table: "social_guidelines", recordId: item.id, priority: item.priority || "Normal" })}
               <button onclick="window.dashboardOpenNotes('social_guidelines', ${item.id})">Notes</button>
               <button class="danger-action" onclick="window.dashboardDeleteRecord('social_guidelines', ${item.id})">Delete</button>
             </div>
@@ -573,6 +591,7 @@ function flattenedActionPlan() {
     effort: entry[2] || section.effort,
     status: "Active",
     project_key: defaultProjectKeyForAction(section.section, entry[0], entry[1]),
+    priority: entry[2] === "complex" ? "Urgent" : "Normal",
     customId: null
   } : entry)).filter((item) => item.status !== "Deleted");
 }
@@ -592,6 +611,7 @@ function actionPlanSections() {
       effort: item.effort || "medium",
       status: item.status || "Active",
       project_key: item.project_key || defaultProjectKeyForAction(item.section, item.title, item.detail),
+      priority: item.priority || "Normal",
       customId: item.id
     };
     const existingIndex = target.items.findIndex((entry) => {
@@ -658,7 +678,7 @@ async function actionItemToTask(encoded) {
   const item = decodeActionItem(encoded);
   const created = await api("/api/records/tasks", {
     method: "POST",
-    body: { title: item.title, lane: "Today", owner: user.name, project_key: item.project_key || defaultProjectKeyForAction(item.section, item.title, item.detail), due_date: "" }
+    body: { title: item.title, lane: "Today", owner: user.name, priority: item.priority || "Normal", project_key: item.project_key || defaultProjectKeyForAction(item.section, item.title, item.detail), due_date: "" }
   });
   state.tasks = [created, ...(state.tasks || [])];
   alert("Added to Plan as a task.");
@@ -673,6 +693,7 @@ async function addChecklistItem(title) {
       title: item.title,
       owner: user.name,
       status: "Planned",
+      priority: "Normal",
       project_key: item.project_key || "misc",
       notes: item.detail,
       updated_by: user.name
@@ -696,6 +717,7 @@ async function patchActionPlanItem(item, patch, options = {}) {
         effort: item.effort || "medium",
         detail: item.detail || "",
         status: patch.status || item.status || "Active",
+        priority: patch.priority || item.priority || "Normal",
         project_key: patch.project_key || item.project_key || defaultProjectKeyForAction(item.section, item.title, item.detail)
       }
     });
@@ -712,19 +734,24 @@ function allProjects() {
       owner: item.owner || "Zac",
       requester: item.requester || "",
       detail: item.detail || "",
-      urgent: ["Urgent", "Boss panic mode"].includes(item.priority),
+      priority: item.priority || "Normal",
+      urgent: isHighPriority(item.priority),
       stage: stageFromTicket(item.status)
     })),
     ...(state.website_updates || []).map((item) => projectFromRecord("website_updates", item, {
       type: "Website",
       owner: "Zac",
       detail: item.detail || "",
+      priority: item.priority || "Normal",
+      urgent: isHighPriority(item.priority),
       stage: stageFromWebsite(item.status)
     })),
     ...(state.social_posts || []).map((item) => projectFromRecord("social_posts", item, {
       type: item.content_type || "Social",
       owner: item.owner || "Zac",
       detail: item.notes || "",
+      priority: item.priority || "Normal",
+      urgent: isHighPriority(item.priority),
       stage: stageFromSocial(item.status)
     })),
     ...(state.content_requests || []).map((item) => projectFromRecord("content_requests", item, {
@@ -732,6 +759,8 @@ function allProjects() {
       owner: item.requester || "Team",
       requester: item.requester || "",
       detail: item.detail || "",
+      priority: item.priority || "Normal",
+      urgent: isHighPriority(item.priority),
       stage: stageFromContent(item.status)
     })),
     ...flattenedActionPlan().map((item) => ({
@@ -747,7 +776,8 @@ function allProjects() {
       projectKey: projectKeyFor(item, "action_plan_items"),
       status: item.status || "Active",
       stage: item.status === "Done" ? "Done" : item.status === "Parked" ? "Parked" : "Active",
-      urgent: item.effort === "complex",
+      priority: item.priority || (item.effort === "complex" ? "Urgent" : "Normal"),
+      urgent: isHighPriority(item.priority || (item.effort === "complex" ? "Urgent" : "Normal")),
       updated: "",
       actionKey: actionPlanKey(item),
       raw: item
@@ -757,13 +787,16 @@ function allProjects() {
       owner: item.author || "Team",
       requester: item.author || "",
       detail: item.detail || "",
-      urgent: item.impact === "High",
+      priority: item.priority || "Normal",
+      urgent: isHighPriority(item.priority) || item.impact === "High",
       stage: stageFromIdea(item.status)
     })),
     ...(state.tasks || []).filter((item) => !Number(item.done)).map((item) => projectFromRecord("tasks", item, {
       type: "Task",
       owner: item.owner || "Zac",
       detail: item.due_date ? `Due ${item.due_date}` : "",
+      priority: item.priority || "Normal",
+      urgent: isHighPriority(item.priority),
       stage: item.lane === "Later" ? "Inbox" : "Active"
     }))
   ].sort((a, b) => projectSort(a) - projectSort(b));
@@ -781,6 +814,7 @@ function projectFromRecord(table, item, extras = {}) {
     requester: extras.requester || "",
     source: config[table]?.title || table,
     projectKey: projectKeyFor(item, table),
+    priority: extras.priority || item.priority || "Normal",
     status: item.status || item.lane || "",
     stage: extras.stage || "Active",
     urgent: Boolean(extras.urgent),
@@ -832,7 +866,8 @@ function briefCard(project) {
         ${project.detail ? `<small>${escapeHtml(project.detail)}</small>` : ""}
       </button>
       <div class="brief-side">
-        ${project.urgent ? `<span class="pill priority-urgent">Urgent</span>` : `<span class="pill status-${slug(project.stage)}">${escapeHtml(project.stage)}</span>`}
+        <span class="pill status-${slug(project.stage)}">${escapeHtml(project.stage)}</span>
+        ${priorityPill(project.priority)}
         ${briefMenu(project)}
       </div>
     </article>
@@ -846,6 +881,7 @@ function briefMenu(project) {
       <summary aria-label="More actions">...</summary>
       <div class="menu-popover">
         ${project.table === "action_plan_items" ? actionLinkSelect(project.raw) : linkSelect(project)}
+        ${prioritySelect(project)}
         ${project.table === "action_plan_items" ? actionStatusButtons(project.raw) : statusButtons(project)}
       </div>
     </details>
@@ -878,6 +914,35 @@ function actionLinkSelect(item) {
   `;
 }
 
+function priorityPill(priority = "Normal") {
+  return `<span class="pill priority-${slug(priority)}">${escapeHtml(priority || "Normal")}</span>`;
+}
+
+function prioritySelect(project) {
+  if (!project) return "";
+  const selected = project.priority || "Normal";
+  if (project.table === "action_plan_items") {
+    const encoded = encodeActionItem(project.raw);
+    return `
+      <label class="link-select">
+        <span>Priority</span>
+        <select onchange="window.dashboardSetActionPriority('${encoded}', this.value)" onclick="event.stopPropagation()">
+          ${priorityOptions.map((option) => `<option value="${escapeHtml(option)}" ${selected === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+        </select>
+      </label>
+    `;
+  }
+  if (!project.recordId) return "";
+  return `
+    <label class="link-select">
+      <span>Priority</span>
+      <select onchange="window.dashboardPatch('${project.table}', ${project.recordId}, {priority: this.value})" onclick="event.stopPropagation()">
+        ${priorityOptions.map((option) => `<option value="${escapeHtml(option)}" ${selected === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
 function statusButtons(project) {
   if (!project.recordId) return "";
   const stages = ["Inbox", "Active", "Waiting", "Parked", "Done"].filter((stage) => stage !== project.stage);
@@ -893,6 +958,10 @@ function actionStatusButtons(item) {
 function projectSort(project) {
   const stageWeight = { Inbox: 0, Waiting: 1, Active: 2, Parked: 3, Done: 4 };
   return (stageWeight[project.stage] || 5) - (project.urgent ? 0.5 : 0);
+}
+
+function isHighPriority(priority) {
+  return ["Urgent", "Boss panic mode"].includes(priority);
 }
 
 function stageFromTicket(status) {
@@ -973,17 +1042,19 @@ function projectCard(project) {
           <span class="project-source">${escapeHtml(project.source)}</span>
           <h4>${escapeHtml(project.title)}</h4>
         </div>
-        ${project.urgent ? `<span class="pill priority-urgent">Urgent</span>` : `<span class="pill status-${slug(project.stage)}">${escapeHtml(project.stage)}</span>`}
+        <span class="pill status-${slug(project.stage)}">${escapeHtml(project.stage)}</span>
       </header>
       ${detail}
       <div class="meta">
         <span class="pill"><span class="meta-label">Type</span>${escapeHtml(project.type)}</span>
+        ${priorityPill(project.priority)}
         ${project.owner ? `<span class="pill"><span class="meta-label">Owner</span>${escapeHtml(project.owner)}</span>` : ""}
         ${project.requester ? `<span class="pill"><span class="meta-label">From</span>${escapeHtml(project.requester)}</span>` : ""}
       </div>
       <div class="actions">
         ${project.recordId ? noteAction(project.table, { id: project.recordId }) : ""}
         ${project.table === "action_plan_items" ? `<button onclick="window.dashboardActionToTask('${encodeActionItem(project.raw)}')">Set as task</button>` : ""}
+        ${briefMenu(project)}
       </div>
     </article>
   `;
@@ -996,6 +1067,7 @@ function planItems() {
     title: item.title,
     detail: item.notes || "",
     status: item.status || "Planned",
+    priority: item.priority || "Normal",
     owner: item.owner || "Zac",
     when: item.status === "Carry on tomorrow" ? "This week" : "Today"
   }));
@@ -1005,6 +1077,7 @@ function planItems() {
     title: item.title,
     detail: item.due_date ? `Due ${item.due_date}` : "",
     status: Number(item.done) ? "Done" : item.lane || "Today",
+    priority: item.priority || "Normal",
     owner: item.owner || "Zac",
     when: item.lane === "Today" ? "Today" : "This week"
   }));
@@ -1020,9 +1093,11 @@ function renderPlanRow(item) {
       </div>
       <div class="brief-side">
         <span class="pill status-${slug(item.status)}">${escapeHtml(item.status)}</span>
+        ${priorityPill(item.priority)}
         <details class="card-menu brief-menu">
           <summary aria-label="More actions">...</summary>
           <div class="menu-popover">
+            ${planPrioritySelect(item)}
             ${planRowActions(item)}
           </div>
         </details>
@@ -1051,6 +1126,17 @@ function planRowActions(item) {
   `;
 }
 
+function planPrioritySelect(item) {
+  return `
+    <label class="link-select">
+      <span>Priority</span>
+      <select onchange="window.dashboardPatch('${item.table}', ${item.id}, {priority: this.value})" onclick="event.stopPropagation()">
+        ${priorityOptions.map((option) => `<option value="${escapeHtml(option)}" ${item.priority === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
 function renderActionRow(item) {
   return `
     <article class="action-row">
@@ -1060,6 +1146,7 @@ function renderActionRow(item) {
       </div>
       <div class="meta">
         <span class="pill status-${slug(item.effort)}">${effortLabel(item.effort)}</span>
+        ${priorityPill(item.priority || "Normal")}
         <span class="pill status-${slug(item.status)}">${escapeHtml(item.status || "Active")}</span>
       </div>
       <div class="actions">
@@ -1069,6 +1156,7 @@ function renderActionRow(item) {
           <summary aria-label="More actions">...</summary>
           <div class="menu-popover">
             ${actionLinkSelect(item)}
+            ${prioritySelect({ table: "action_plan_items", raw: item, priority: item.priority || "Normal" })}
             ${actionStatusButtons(item)}
             <button class="danger-action" onclick="window.dashboardDeleteActionItem('${encodeActionItem(item)}')">Delete</button>
           </div>
@@ -1096,6 +1184,9 @@ function achievementFeed() {
     detail: item.detail || "",
     area: item.area || "Marketing",
     projectKey: projectKeyFor(item, "changelog"),
+    table: "changelog",
+    recordId: item.id,
+    priority: item.priority || "Normal",
     date: item.shipped_at || "",
     kind: "Logged"
   }));
@@ -1106,6 +1197,11 @@ function achievementFeed() {
       detail: project.detail || `Completed ${project.type.toLowerCase()} project.`,
       area: project.type || "Project",
       projectKey: project.projectKey,
+      table: project.table,
+      recordId: project.recordId,
+      actionKey: project.actionKey,
+      raw: project.raw,
+      priority: project.priority || "Normal",
       date: project.updated || "",
       kind: "Completed"
     }));
@@ -1120,8 +1216,22 @@ function renderAchievement(item) {
         <strong>${escapeHtml(item.title || "Untitled achievement")}</strong>
         <p>${escapeHtml(item.detail || "")}</p>
         <span class="pill">${escapeHtml(item.area || item.kind || "Outcome")}</span>
+        ${priorityPill(item.priority || "Normal")}
+        ${achievementPriorityMenu(item)}
       </div>
     </article>
+  `;
+}
+
+function achievementPriorityMenu(item) {
+  if (!item?.recordId && item?.table !== "action_plan_items") return "";
+  return `
+    <details class="card-menu brief-menu">
+      <summary aria-label="More actions">...</summary>
+      <div class="menu-popover">
+        ${prioritySelect(item.table === "action_plan_items" ? { table: "action_plan_items", raw: item.raw, priority: item.priority || "Normal" } : { table: item.table, recordId: item.recordId, priority: item.priority || "Normal" })}
+      </div>
+    </details>
   `;
 }
 
@@ -1290,7 +1400,8 @@ function renderTickets() {
               owner: ticket.owner || "Zac",
               requester: ticket.requester || "",
               detail: ticket.detail || "",
-              urgent: ["Urgent", "Boss panic mode"].includes(ticket.priority),
+              priority: ticket.priority || "Normal",
+              urgent: isHighPriority(ticket.priority),
               stage: stageFromTicket(ticket.status)
               })))}</div>
             </section>
@@ -2023,44 +2134,51 @@ function metaFor(item, table) {
   const maps = {
     tickets: [
       ["Status", item.status, "status"],
-      ["Priority", item.priority, "priority"],
+      ["Priority", item.priority || "Normal", "priority"],
       ["From", item.requester, "requester"],
       ["Type", item.category, "category"]
     ],
     ideas: [
       ["Status", item.status, "status"],
+      ["Priority", item.priority || "Normal", "priority"],
       ["Impact", item.impact, "impact"],
       ["From", item.author, "author"]
     ],
     tasks: [
       ["Owner", item.owner, "owner"],
+      ["Priority", item.priority || "Normal", "priority"],
       ["Lane", item.lane, "status"],
       ["Due", item.due_date, "due_date"]
     ],
     todays_plan: [
       ["Owner", item.owner, "owner"],
+      ["Priority", item.priority || "Normal", "priority"],
       ["Status", item.status, "status"],
       ["Updated by", item.updated_by, "author"]
     ],
     social_posts: [
       ["Status", item.status, "status"],
+      ["Priority", item.priority || "Normal", "priority"],
       ["Platform", item.platform, "platform"],
       ["Type", item.content_type, "asset_type"],
       ["Scheduled", item.scheduled_for, "deadline"]
     ],
     content_requests: [
       ["Status", item.status, "status"],
+      ["Priority", item.priority || "Normal", "priority"],
       ["Asset", item.asset_type, "asset_type"],
       ["From", item.requester, "requester"],
       ["Deadline", item.deadline, "deadline"]
     ],
     website_updates: [
       ["Area", item.area, "area"],
+      ["Priority", item.priority || "Normal", "priority"],
       ["Status", item.status, "status"],
       ["Release", item.release_date, "release_date"]
     ],
     changelog: [
       ["Area", item.area, "area"],
+      ["Priority", item.priority || "Normal", "priority"],
       ["Shipped", item.shipped_at, "shipped_at"]
     ]
   };
@@ -2146,7 +2264,8 @@ function fieldHtml([name, label, type, options]) {
       const selected = selectedProjectKey && selectedProjectKey !== "tools" ? selectedProjectKey : "unsorted-tickets";
       return `<label>${label}<select name="${name}">${projectAreas.map((project) => `<option value="${project.key}" ${project.key === selected ? "selected" : ""}>${escapeHtml(project.name)}</option>`).join("")}</select></label>`;
     }
-    return `<label>${label}<select name="${name}">${options.map((option) => `<option>${option}</option>`).join("")}</select></label>`;
+    const selected = name === "priority" ? "Normal" : options[0];
+    return `<label>${label}<select name="${name}">${options.map((option) => `<option value="${escapeHtml(option)}" ${option === selected ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select></label>`;
   }
   return `<label>${label}<input name="${name}" type="${type}"></label>`;
 }
@@ -2173,6 +2292,7 @@ function withDefaults(table, body) {
       requester: user.name,
       status: "New",
       owner: "Zac",
+      priority: "Normal",
       project_key: selectedProjectKey && selectedProjectKey !== "tools" ? selectedProjectKey : "unsorted-tickets",
       ...body
     };
@@ -2182,6 +2302,7 @@ function withDefaults(table, body) {
       owner: user.name,
       updated_by: user.name,
       status: "Planned",
+      priority: "Normal",
       project_key: selectedProjectKey || "misc",
       ...body
     };
@@ -2190,6 +2311,7 @@ function withDefaults(table, body) {
     return {
       owner: user.name,
       status: "Idea",
+      priority: "Normal",
       project_key: selectedProjectKey || "social-media",
       ...body
     };
@@ -2198,6 +2320,7 @@ function withDefaults(table, body) {
     return {
       author: user.name,
       status: "Inbox",
+      priority: "Normal",
       project_key: selectedProjectKey || "misc",
       ...body
     };
@@ -2207,6 +2330,32 @@ function withDefaults(table, body) {
       section: "Custom",
       effort: "medium",
       status: "Active",
+      priority: "Normal",
+      project_key: selectedProjectKey || "misc",
+      ...body
+    };
+  }
+  if (table === "content_requests") {
+    return {
+      requester: user.name,
+      status: "Needed",
+      priority: "Normal",
+      project_key: selectedProjectKey || "misc",
+      ...body
+    };
+  }
+  if (table === "website_updates") {
+    return {
+      status: "Plan",
+      priority: "Normal",
+      project_key: selectedProjectKey || "website",
+      ...body
+    };
+  }
+  if (table === "changelog") {
+    return {
+      shipped_at: body.shipped_at || new Date().toISOString().slice(0, 10),
+      priority: "Normal",
       project_key: selectedProjectKey || "misc",
       ...body
     };
@@ -2221,6 +2370,7 @@ function withDefaults(table, body) {
   if (table === "social_guidelines") {
     return {
       category: "General",
+      priority: "Normal",
       ...body
     };
   }
@@ -2251,6 +2401,11 @@ async function moveActionItem(encodedAction, status) {
 async function linkActionItem(encodedAction, projectKey) {
   if (!encodedAction || !projectKey) return;
   await patchActionPlanItem(decodeActionItem(encodedAction), { project_key: projectKey });
+}
+
+async function setActionPriority(encodedAction, priority) {
+  if (!encodedAction || !priority) return;
+  await patchActionPlanItem(decodeActionItem(encodedAction), { priority });
 }
 
 function selectTickets(status) {
@@ -2410,6 +2565,7 @@ window.dashboardLinkProject = linkProject;
 window.dashboardMoveProject = moveProject;
 window.dashboardMoveActionItem = moveActionItem;
 window.dashboardLinkActionItem = linkActionItem;
+window.dashboardSetActionPriority = setActionPriority;
 window.dashboardOpenProject = openProject;
 window.dashboardBackToProjects = backToProjects;
 window.dashboardSelectTickets = selectTickets;

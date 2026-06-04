@@ -1,0 +1,9 @@
+ALTER TABLE ideas ADD COLUMN priority TEXT NOT NULL DEFAULT 'Normal';
+ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'Normal';
+ALTER TABLE todays_plan ADD COLUMN priority TEXT NOT NULL DEFAULT 'Normal';
+ALTER TABLE social_posts ADD COLUMN priority TEXT NOT NULL DEFAULT 'Normal';
+ALTER TABLE social_guidelines ADD COLUMN priority TEXT NOT NULL DEFAULT 'Normal';
+ALTER TABLE action_plan_items ADD COLUMN priority TEXT NOT NULL DEFAULT 'Normal';
+ALTER TABLE content_requests ADD COLUMN priority TEXT NOT NULL DEFAULT 'Normal';
+ALTER TABLE website_updates ADD COLUMN priority TEXT NOT NULL DEFAULT 'Normal';
+ALTER TABLE changelog ADD COLUMN priority TEXT NOT NULL DEFAULT 'Normal';

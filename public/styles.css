@@ -585,6 +585,50 @@ textarea:focus {
   gap: 14px;
 }
 
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.summary-box {
+  display: grid;
+  gap: 8px;
+  min-height: 126px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+  box-shadow: var(--shadow-small);
+  cursor: pointer;
+}
+
+.summary-box:hover,
+.summary-box.active {
+  border-color: rgba(30, 111, 146, 0.5);
+  box-shadow: var(--shadow);
+}
+
+.summary-box span {
+  color: var(--blue);
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.summary-box strong {
+  font-size: 2.1rem;
+  line-height: 1;
+}
+
+.summary-box small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
 .brief-list {
   display: grid;
   gap: 8px;
@@ -648,6 +692,38 @@ textarea:focus {
   font-size: 0.78rem;
 }
 
+.menu-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  display: grid;
+  gap: 10px;
+  width: min(260px, 78vw);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow-small);
+}
+
+.menu-actions {
+  display: grid;
+  gap: 7px;
+}
+
+.menu-popover button {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafb;
+  color: var(--ink);
+  font-weight: 900;
+  text-align: left;
+  padding: 0 10px;
+}
+
 .project-lane {
   min-width: 0;
   padding: 14px;
@@ -660,7 +736,8 @@ textarea:focus {
 .focus-stack,
 .compact-list,
 .timeline,
-.action-list {
+.action-list,
+.report-list {
   display: grid;
   gap: 10px;
 }
@@ -680,13 +757,29 @@ textarea:focus {
 
 .compact-row,
 .action-row,
-.achievement {
+.achievement,
+.report-row {
   display: grid;
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
+}
+
+.report-row {
+  color: var(--ink);
+  text-align: left;
+}
+
+.report-row.active {
+  border-color: rgba(30, 111, 146, 0.5);
+  box-shadow: var(--shadow-small);
+}
+
+.report-row span {
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 .compact-row {
@@ -1008,7 +1101,7 @@ textarea:focus {
   color: var(--blue);
 }
 
-.card-menu[open] button {
+.card-menu[open] > button {
   position: absolute;
   right: 0;
   top: calc(100% + 6px);

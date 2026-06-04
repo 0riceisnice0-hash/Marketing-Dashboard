@@ -211,9 +211,7 @@ const config = {
     fields: [
       ["title", "Title", "hidden", "dailyReportTitle"],
       ["report_date", "Date", "date"],
-      ["body", "What changed today?", "textarea"],
-      ["wins", "Wins / outcomes", "textarea"],
-      ["blockers", "Blockers / follow-up", "textarea"],
+      ["body", "What happened today and what did you do?", "textarea"],
       ["updated_by", "Updated by", "hidden", "currentUser"]
     ]
   }
@@ -226,6 +224,9 @@ let selectedFensterConversationId = null;
 let current = "dashboard";
 let selectedProjectKey = "";
 let selectedReportDate = new Date().toISOString().slice(0, 10);
+let selectedTicketFilter = "";
+let selectedSocialFilter = "";
+let showPlanDone = false;
 let user = null;
 let ticketSearch = "";
 let refreshTimer = null;
@@ -423,21 +424,33 @@ function renderTodaysPlan() {
 
 function renderSocial() {
   const guidelines = state.social_guidelines || [];
+  const groups = ["Idea", "Planned", "Scheduled", "Posted", "Parked"];
+  const posts = state.social_posts || [];
+  const visible = selectedSocialFilter ? posts.filter((item) => item.status === selectedSocialFilter) : [];
   view.innerHTML = `
-    <div class="board-tools">
-      <p><strong>Social media planner</strong><br>Drag posts through the workflow. Keep guidelines underneath as reference notes, not mixed into ideas.</p>
-      <div class="board-actions">
-        <button class="primary-button" onclick="window.dashboardOpen('social_posts')">New social post</button>
-      </div>
+    <div class="ticket-toolbar">
+      <button class="primary-button" onclick="window.dashboardOpen('social_posts')">New social post</button>
     </div>
-    <div class="grid columns">
-      ${["Idea", "Planned", "Scheduled", "Posted", "Parked"].map((group) => `
-        <section class="column" data-table="social_posts" data-field="status" data-value="${escapeHtml(group)}">
-          ${columnHeader(group, (state.social_posts || []).filter((item) => item.status === group).length)}
-          <div class="card-list">${cards((state.social_posts || []).filter((item) => item.status === group), "social_posts")}</div>
-        </section>
+    <div class="summary-grid">
+      ${groups.map((group) => `
+        <button class="summary-box ${selectedSocialFilter === group ? "active" : ""}" onclick="window.dashboardSelectSocial('${group}')">
+          <span>${group}</span>
+          <strong>${posts.filter((item) => item.status === group).length}</strong>
+          <small>${socialSummary(group)}</small>
+        </button>
       `).join("")}
     </div>
+    ${selectedSocialFilter ? `
+      <section class="panel selected-list">
+        ${panelHeader(selectedSocialFilter, "Click a post to view notes or use the menu to move/link it.", visible.length)}
+        <div class="brief-list">${briefCards(visible.map((item) => projectFromRecord("social_posts", item, {
+          type: item.content_type || "Social",
+          owner: item.owner || "Zac",
+          detail: item.notes || "",
+          stage: stageFromSocial(item.status)
+        })))}</div>
+      </section>
+    ` : ""}
     <div class="section-tools">
       <h3>Social guidelines</h3>
       <button onclick="window.dashboardOpen('social_guidelines')">New guideline</button>
@@ -448,6 +461,16 @@ function renderSocial() {
   `;
 }
 
+function socialSummary(group) {
+  return {
+    Idea: "Unshaped content thoughts.",
+    Planned: "Chosen posts to make.",
+    Scheduled: "Ready and waiting.",
+    Posted: "Published history.",
+    Parked: "Kept out of the way."
+  }[group] || "";
+}
+
 function renderGuideline(item) {
   return `
     <article class="guideline">
@@ -456,8 +479,13 @@ function renderGuideline(item) {
           <h4>${escapeHtml(item.title)}</h4>
           <span class="pill">${escapeHtml(item.category || "General")}</span>
         </div>
-        <button class="note-button" onclick="window.dashboardOpenNotes('social_guidelines', ${item.id})">${noteBadge("social_guidelines", item.id)}</button>
-        <button class="danger-action" onclick="window.dashboardDeleteRecord('social_guidelines', ${item.id})">Delete</button>
+        <details class="card-menu brief-menu">
+          <summary aria-label="More actions">...</summary>
+          <div class="menu-popover">
+            <button onclick="window.dashboardOpenNotes('social_guidelines', ${item.id})">Notes</button>
+            <button class="danger-action" onclick="window.dashboardDeleteRecord('social_guidelines', ${item.id})">Delete</button>
+          </div>
+        </details>
       </header>
       <p>${escapeHtml(item.body || "")}</p>
     </article>
@@ -759,9 +787,22 @@ function briefCard(project) {
       </button>
       <div class="brief-side">
         ${project.urgent ? `<span class="pill priority-urgent">Urgent</span>` : `<span class="pill status-${slug(project.stage)}">${escapeHtml(project.stage)}</span>`}
-        ${linkSelect(project)}
+        ${briefMenu(project)}
       </div>
     </article>
+  `;
+}
+
+function briefMenu(project) {
+  if (!project.recordId && project.table !== "action_plan_items") return "";
+  return `
+    <details class="card-menu brief-menu">
+      <summary aria-label="More actions">...</summary>
+      <div class="menu-popover">
+        ${project.recordId ? linkSelect(project) : ""}
+        ${project.table === "action_plan_items" ? actionStatusButtons(project.raw) : statusButtons(project)}
+      </div>
+    </details>
   `;
 }
 
@@ -775,6 +816,18 @@ function linkSelect(project) {
       </select>
     </label>
   `;
+}
+
+function statusButtons(project) {
+  if (!project.recordId) return "";
+  const stages = ["Inbox", "Active", "Waiting", "Parked", "Done"].filter((stage) => stage !== project.stage);
+  return `<div class="menu-actions">${stages.map((stage) => `<button onclick="window.dashboardMoveProject('${project.table}', ${project.recordId}, '${stage}')">Move to ${stage}</button>`).join("")}</div>`;
+}
+
+function actionStatusButtons(item) {
+  if (!item) return "";
+  const encoded = encodeActionItem(item);
+  return `<div class="menu-actions">${["Active", "Parked", "Done"].filter((status) => status !== item.status).map((status) => `<button onclick="window.dashboardMoveActionItem('${encoded}', '${status}')">${status}</button>`).join("")}</div>`;
 }
 
 function projectSort(project) {
@@ -905,8 +958,30 @@ function renderPlanRow(item) {
         <strong>${escapeHtml(item.title || "Untitled")}</strong>
         <span>${escapeHtml(item.detail || item.owner || "")}</span>
       </div>
-      <span class="pill status-${slug(item.status)}">${escapeHtml(item.status)}</span>
+      <div class="brief-side">
+        <span class="pill status-${slug(item.status)}">${escapeHtml(item.status)}</span>
+        <details class="card-menu brief-menu">
+          <summary aria-label="More actions">...</summary>
+          <div class="menu-popover">
+            ${planRowActions(item)}
+          </div>
+        </details>
+      </div>
     </article>
+  `;
+}
+
+function planRowActions(item) {
+  if (item.table === "tasks") {
+    return `
+      <button onclick="window.dashboardPatch('tasks', ${item.id}, {done: 1})">Done</button>
+      <button onclick="window.dashboardPatch('tasks', ${item.id}, {lane: 'Later'})">Park</button>
+      <button class="danger-action" onclick="window.dashboardDeleteRecord('tasks', ${item.id})">Delete</button>
+    `;
+  }
+  return `
+    ${["Doing", "Parked", "Done", "Carry on tomorrow", "Planned"].filter((status) => status !== item.status).map((status) => `<button onclick="window.dashboardPatch('todays_plan', ${item.id}, {status: '${status}'})">${status}</button>`).join("")}
+    <button class="danger-action" onclick="window.dashboardDeleteRecord('todays_plan', ${item.id})">Delete</button>
   `;
 }
 
@@ -998,7 +1073,7 @@ function renderDashboard() {
   const waiting = projects.filter((project) => project.stage === "Waiting");
   const urgent = projects.filter((project) => project.urgent && project.stage !== "Done");
   const completed = projects.filter((project) => project.stage === "Done");
-  const today = planItems().filter((item) => item.when === "Today");
+  const today = planItems().filter((item) => item.when === "Today" && item.status !== "Done");
   const recentWins = achievementFeed().slice(0, 5);
 
   view.innerHTML = `
@@ -1006,10 +1081,6 @@ function renderDashboard() {
       <div>
         <p class="eyebrow">Fenster Marketing OS</p>
         <p>Active work, blockers, urgent requests, today, and completed outcomes in one calm view.</p>
-      </div>
-      <div class="hero-actions">
-        <button class="primary-button" onclick="window.dashboardOpen('tickets')">New request</button>
-        <button onclick="window.dashboardOpen('changelog')">Log achievement</button>
       </div>
     </section>
     <div class="grid stats command-stats">
@@ -1086,9 +1157,6 @@ function renderProjectDetail(key) {
         <h3>${escapeHtml(project.name)}</h3>
         <p>${escapeHtml(project.text)}</p>
       </div>
-      <div class="board-actions">
-        <button class="primary-button" onclick="window.dashboardOpen('tickets')">New request</button>
-      </div>
     </div>
     <div class="grid stats project-detail-stats">
       ${stat("Active", active.length, "Visible work", "#1e6f92")}
@@ -1098,12 +1166,16 @@ function renderProjectDetail(key) {
     </div>
     <div class="grid two">
       <section class="panel">
-        ${panelHeader("Current work", "Done items are hidden here. Use Completed for history.", active.length)}
+        ${panelHeader("Current work", "", active.length)}
         <div class="brief-list">${briefCards(active)}</div>
       </section>
       <section class="panel">
-        ${panelHeader("Parked", "Things to keep but not look at all day.", parked.length)}
+        ${panelHeader("Parked", "", parked.length)}
         <div class="brief-list">${briefCards(parked)}</div>
+      </section>
+      <section class="panel">
+        ${panelHeader("Done", "", done.length)}
+        <div class="brief-list">${briefCards(done)}</div>
       </section>
     </div>
   `;
@@ -1111,54 +1183,78 @@ function renderProjectDetail(key) {
 
 function renderTickets() {
   const tickets = filteredTickets();
-  const active = tickets.filter((item) => item.status !== "Done");
+  const statuses = ["New", "In Progress", "Waiting on Someone", "Parked", "Done"];
+  const filtered = selectedTicketFilter ? tickets.filter((item) => item.status === selectedTicketFilter) : [];
   view.innerHTML = `
     <div class="ticket-toolbar">
       <input class="search-input" type="search" placeholder="Search tickets..." value="${escapeHtml(ticketSearch)}" oninput="window.dashboardSearchTickets(this.value)">
       <button class="primary-button" onclick="window.dashboardOpen('tickets')">New ticket</button>
     </div>
-    <div class="ticket-project-groups">
-      ${projectAreas.map((project) => {
-        const list = active.filter((ticket) => projectKeyFor(ticket, "tickets") === project.key);
-        if (!list.length && project.key !== "unsorted-tickets") return "";
-        return `
-          <section class="panel ticket-group">
-            ${panelHeader(project.name, project.text, list.length)}
-            <div class="brief-list">${briefCards(list.map((ticket) => projectFromRecord("tickets", ticket, {
+    <div class="summary-grid">
+      ${statuses.map((status) => `
+        <button class="summary-box ${selectedTicketFilter === status ? "active" : ""}" onclick="window.dashboardSelectTickets('${status}')">
+          <span>${status}</span>
+          <strong>${tickets.filter((ticket) => ticket.status === status).length}</strong>
+          <small>${ticketSummary(status)}</small>
+        </button>
+      `).join("")}
+    </div>
+    ${selectedTicketFilter ? `
+      <div class="ticket-project-groups">
+        ${projectAreas.map((project) => {
+          const list = filtered.filter((ticket) => projectKeyFor(ticket, "tickets") === project.key);
+          if (!list.length && project.key !== "unsorted-tickets") return "";
+          return `
+            <section class="panel ticket-group">
+              ${panelHeader(project.name, project.text, list.length)}
+              <div class="brief-list">${briefCards(list.map((ticket) => projectFromRecord("tickets", ticket, {
               type: ticket.category || "Ticket",
               owner: ticket.owner || "Zac",
               requester: ticket.requester || "",
               detail: ticket.detail || "",
               urgent: ["Urgent", "Boss panic mode"].includes(ticket.priority),
               stage: stageFromTicket(ticket.status)
-            })))}</div>
-          </section>
-        `;
-      }).join("")}
-    </div>
+              })))}</div>
+            </section>
+          `;
+        }).join("")}
+      </div>
+    ` : ""}
   `;
+}
+
+function ticketSummary(status) {
+  return {
+    New: "Waiting to be triaged.",
+    "In Progress": "Being worked on.",
+    "Waiting on Someone": "Needs someone else.",
+    Parked: "Paused for now.",
+    Done: "Completed ticket history."
+  }[status] || "";
 }
 
 function renderPlan() {
   const items = planItems();
-  const actionItems = flattenedActionPlan().filter((item) => item.status !== "Deleted");
+  const visibleItems = showPlanDone ? items : items.filter((item) => item.status !== "Done");
+  const actionItems = flattenedActionPlan().filter((item) => item.status !== "Deleted" && (showPlanDone || item.status !== "Done"));
   view.innerHTML = `
     <div class="ticket-toolbar">
       <button onclick="window.dashboardOpen('action_plan_items')">Add action</button>
       <button class="primary-button" onclick="window.dashboardOpen('todays_plan')">Add today</button>
+      <button onclick="window.dashboardTogglePlanDone()">${showPlanDone ? "Hide done" : "Show done"}</button>
     </div>
     <div class="grid two plan-v2">
       <section class="panel">
-        ${panelHeader("Today", "Small enough to actually use.", items.filter((item) => item.when === "Today").length)}
-        <div class="compact-list">${items.filter((item) => item.when === "Today").map(renderPlanRow).join("") || `<p class="empty">No plan items for today.</p>`}</div>
+        ${panelHeader("Today", "", visibleItems.filter((item) => item.when === "Today").length)}
+        <div class="compact-list">${visibleItems.filter((item) => item.when === "Today").map(renderPlanRow).join("") || `<p class="empty">No plan items for today.</p>`}</div>
       </section>
       <section class="panel">
-        ${panelHeader("This week", "Commitments and carry-forward work.", items.filter((item) => item.when !== "Today").length)}
-        <div class="compact-list">${items.filter((item) => item.when !== "Today").slice(0, 12).map(renderPlanRow).join("") || `<p class="empty">No weekly work queued.</p>`}</div>
+        ${panelHeader("This week", "", visibleItems.filter((item) => item.when !== "Today").length)}
+        <div class="compact-list">${visibleItems.filter((item) => item.when !== "Today").slice(0, 12).map(renderPlanRow).join("") || `<p class="empty">No weekly work queued.</p>`}</div>
       </section>
     </div>
     <section class="panel action-library">
-      ${panelHeader("Marketing action library", "The useful thinking from the old Action Plan, condensed into a scan-friendly list.", actionItems.length)}
+      ${panelHeader("Marketing action library", "", actionItems.length)}
       <div class="action-list">${actionItems.map(renderActionRow).join("")}</div>
     </section>
   `;
@@ -1166,7 +1262,7 @@ function renderPlan() {
 
 function renderCompleted() {
   const feed = achievementFeed();
-  const reports = state.daily_reports || [];
+  const reports = [...(state.daily_reports || [])].sort((a, b) => new Date(b.report_date || 0) - new Date(a.report_date || 0));
   const selected = reportForDate(selectedReportDate);
   view.innerHTML = `
     <div class="ticket-toolbar">
@@ -1175,19 +1271,29 @@ function renderCompleted() {
     </div>
     <div class="grid two completed-layout">
       <section class="panel">
-        ${panelHeader("End-of-day report", "Pick a day, write what changed, and come back to edit it later.", reports.length)}
+        ${panelHeader("End-of-day report", "", reports.length)}
         <div class="daily-report-editor">
           <label>Date<input id="daily-report-date" type="date" value="${escapeHtml(selectedReportDate)}" onchange="window.dashboardSelectReportDate(this.value)"></label>
-          <label>What changed today?<textarea id="daily-report-body">${escapeHtml(selected?.body || "")}</textarea></label>
-          <label>Wins / outcomes<textarea id="daily-report-wins">${escapeHtml(selected?.wins || "")}</textarea></label>
-          <label>Blockers / follow-up<textarea id="daily-report-blockers">${escapeHtml(selected?.blockers || "")}</textarea></label>
+          <label>What happened today and what did you do?<textarea id="daily-report-body" placeholder="One useful sentence is enough.">${escapeHtml(selected?.body || selected?.wins || "")}</textarea></label>
+        </div>
+        <div class="report-list">
+          ${reports.length ? reports.map(renderReportRow).join("") : `<p class="empty">No daily reports yet.</p>`}
         </div>
       </section>
       <section class="panel">
-        ${panelHeader("Completed projects", "Only completed and done work appears here.", feed.length)}
+        ${panelHeader("Completed projects", "", feed.length)}
         <div class="timeline">${feed.length ? feed.map(renderAchievement).join("") : `<p class="empty">No achievements yet.</p>`}</div>
       </section>
     </div>
+  `;
+}
+
+function renderReportRow(report) {
+  return `
+    <button class="report-row ${selectedReportDate === report.report_date ? "active" : ""}" onclick="window.dashboardSelectReportDate('${escapeHtml(report.report_date)}')">
+      <strong>${escapeHtml(formatShortDate(report.report_date))}</strong>
+      <span>${escapeHtml(report.body || report.wins || "No report text")}</span>
+    </button>
   `;
 }
 
@@ -1934,7 +2040,8 @@ function fieldHtml([name, label, type, options]) {
   if (type === "textarea") return `<label>${label}<textarea name="${name}"></textarea></label>`;
   if (type === "select") {
     if (name === "project_key") {
-      return `<label>${label}<select name="${name}">${projectAreas.map((project) => `<option value="${project.key}">${escapeHtml(project.name)}</option>`).join("")}</select></label>`;
+      const selected = selectedProjectKey && selectedProjectKey !== "tools" ? selectedProjectKey : "unsorted-tickets";
+      return `<label>${label}<select name="${name}">${projectAreas.map((project) => `<option value="${project.key}" ${project.key === selected ? "selected" : ""}>${escapeHtml(project.name)}</option>`).join("")}</select></label>`;
     }
     return `<label>${label}<select name="${name}">${options.map((option) => `<option>${option}</option>`).join("")}</select></label>`;
   }
@@ -2028,6 +2135,31 @@ async function linkProject(table, id, projectKey) {
   await patchRecord(table, id, { project_key: projectKey });
 }
 
+async function moveProject(table, id, stage) {
+  if (!table || !id || !stage) return;
+  await patchProjectStage({ table, id: String(id), actionKey: "" }, stage);
+}
+
+async function moveActionItem(encodedAction, status) {
+  if (!encodedAction || !status) return;
+  await patchActionPlanItem(decodeActionItem(encodedAction), { status });
+}
+
+function selectTickets(status) {
+  selectedTicketFilter = selectedTicketFilter === status ? "" : status;
+  render();
+}
+
+function selectSocial(status) {
+  selectedSocialFilter = selectedSocialFilter === status ? "" : status;
+  render();
+}
+
+function togglePlanDone() {
+  showPlanDone = !showPlanDone;
+  render();
+}
+
 function openProject(key) {
   selectedProjectKey = key;
   current = "projects";
@@ -2055,8 +2187,8 @@ async function saveDailyReport() {
     title: `End of day - ${reportDate}`,
     report_date: reportDate,
     body: $("#daily-report-body")?.value || "",
-    wins: $("#daily-report-wins")?.value || "",
-    blockers: $("#daily-report-blockers")?.value || "",
+    wins: "",
+    blockers: "",
     updated_by: user.name
   };
   const existing = reportForDate(reportDate);
@@ -2167,10 +2299,15 @@ window.dashboardDeleteRecord = deleteRecord;
 window.dashboardSearchTickets = searchTickets;
 window.dashboardOpenNotes = openNotes;
 window.dashboardLinkProject = linkProject;
+window.dashboardMoveProject = moveProject;
+window.dashboardMoveActionItem = moveActionItem;
 window.dashboardOpenProject = openProject;
 window.dashboardBackToProjects = backToProjects;
+window.dashboardSelectTickets = selectTickets;
+window.dashboardSelectSocial = selectSocial;
 window.dashboardSelectReportDate = selectReportDate;
 window.dashboardSaveDailyReport = saveDailyReport;
+window.dashboardTogglePlanDone = togglePlanDone;
 window.dashboardFilterPlan = filterPlan;
 window.dashboardTogglePlan = togglePlan;
 window.dashboardDeleteActionItem = deleteActionItem;

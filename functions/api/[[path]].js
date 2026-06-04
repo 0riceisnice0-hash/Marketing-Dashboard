@@ -1,16 +1,17 @@
 import { USERS } from "../_data/users.js";
 
 const TABLES = {
-  tickets: ["title", "requester", "category", "priority", "status", "owner", "detail"],
-  ideas: ["title", "author", "impact", "status", "detail"],
-  tasks: ["title", "lane", "owner", "due_date", "done"],
-  todays_plan: ["title", "owner", "status", "notes", "updated_by"],
-  social_posts: ["title", "platform", "content_type", "status", "scheduled_for", "owner", "notes"],
+  tickets: ["title", "requester", "category", "priority", "status", "owner", "detail", "project_key"],
+  ideas: ["title", "author", "impact", "status", "detail", "project_key"],
+  tasks: ["title", "lane", "owner", "due_date", "done", "project_key"],
+  todays_plan: ["title", "owner", "status", "notes", "updated_by", "project_key"],
+  social_posts: ["title", "platform", "content_type", "status", "scheduled_for", "owner", "notes", "project_key"],
   social_guidelines: ["title", "category", "body"],
-  action_plan_items: ["title", "section", "effort", "detail", "status"],
-  content_requests: ["title", "requester", "asset_type", "deadline", "status", "detail"],
-  website_updates: ["title", "area", "status", "release_date", "detail"],
-  changelog: ["title", "shipped_at", "area", "detail"]
+  action_plan_items: ["title", "section", "effort", "detail", "status", "project_key"],
+  content_requests: ["title", "requester", "asset_type", "deadline", "status", "detail", "project_key"],
+  website_updates: ["title", "area", "status", "release_date", "detail", "project_key"],
+  changelog: ["title", "shipped_at", "area", "detail", "project_key"],
+  daily_reports: ["title", "report_date", "body", "wins", "blockers", "updated_by"]
 };
 
 const ALLOWED_TABLES = new Set(Object.keys(TABLES));

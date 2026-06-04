@@ -11,6 +11,7 @@ const tables = {
   content_requests: [],
   website_updates: [],
   changelog: [],
+  daily_reports: [],
   notes: [],
   fenster_conversations: [],
   fenster_messages: [],

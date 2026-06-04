@@ -1,22 +1,30 @@
 const tabs = [
-  { id: "dashboard", label: "Command Centre", icon: "C" },
+  { id: "dashboard", label: "Dashboard", icon: "D" },
   { id: "projects", label: "Projects", icon: "P" },
-  { id: "inbox", label: "Inbox", icon: "I" },
+  { id: "tickets", label: "Tickets", icon: "T" },
   { id: "plan", label: "Plan", icon: "N" },
-  { id: "achievements", label: "Achievements", icon: "A" },
-  { id: "social", label: "Social Media", icon: "S" },
-  { id: "tools", label: "Tools", icon: "T" }
+  { id: "completed", label: "Completed", icon: "C" },
+  { id: "social", label: "Social Media", icon: "S" }
 ];
 
 const viewCopy = {
   dashboard: "What matters now, what is blocked, and what has recently shipped.",
-  projects: "The real work, organised as projects instead of database tables.",
-  inbox: "New requests, rough ideas, and work that has not become a project yet.",
+  projects: "Choose a work area, then link tickets, ideas, plans, and updates into it.",
+  tickets: "Requests stay separate, with each one linked to a project area.",
   plan: "Today, this week, and the wider marketing action plan in one focused place.",
-  achievements: "Evidence of delivered value for reviews, probation, and future check-ins.",
-  social: "Social planning, guidelines, and content movement without mixing it into ideas.",
-  tools: "Live operational tools, starting with the Fenster Meta Bot."
+  completed: "Completed projects, shipped work, and end-of-day reports.",
+  social: "Social planning, guidelines, and content movement without mixing it into ideas."
 };
+
+const projectAreas = [
+  { key: "website", name: "Website", text: "Pages, SEO, website fixes, product pages, tracking, forms, and launches." },
+  { key: "brochure", name: "Brochure", text: "Brochures, leaflets, sales sheets, showroom print, plaques, and sales material." },
+  { key: "social-media", name: "Social Media", text: "Posts, stories, reels, content guidelines, review highlights, and social ideas." },
+  { key: "tools", name: "Tools", text: "Meta Bot, automations, dashboard work, AI helpers, and operational software." },
+  { key: "application-development", name: "Application Development", text: "Dashboard, bot, Cloudflare, internal apps, and technical systems." },
+  { key: "misc", name: "Misc", text: "Useful work that does not fit a named project yet." },
+  { key: "unsorted-tickets", name: "Unsorted Tickets", text: "Older requests that still need a proper project link." }
+];
 
 const actionPlan = [
   {
@@ -84,6 +92,7 @@ const config = {
       ["title", "Title", "text"],
       ["category", "Category", "select", ["Marketing", "Website", "Content", "Reporting", "Showroom", "Other"]],
       ["priority", "Priority", "select", ["Low", "Normal", "Urgent", "Boss panic mode"]],
+      ["project_key", "Project", "select", projectOptions()],
       ["detail", "Detail", "textarea"],
       ["requester", "Requester", "hidden", "currentUser"],
       ["status", "Status", "hidden", "New"],
@@ -97,6 +106,7 @@ const config = {
       ["title", "Title", "text"],
       ["author", "Author", "text"],
       ["impact", "Impact", "select", ["Low", "Medium", "High"]],
+      ["project_key", "Project", "select", projectOptions()],
       ["status", "Status", "select", ["Inbox", "Considering", "Approved", "Parked", "Done"]],
       ["detail", "Detail", "textarea"]
     ]
@@ -108,6 +118,7 @@ const config = {
       ["title", "Title", "text"],
       ["lane", "Lane", "select", ["Today", "This Week", "Later"]],
       ["owner", "Owner", "select", ["Zac", "Adam", "Nick"]],
+      ["project_key", "Project", "select", projectOptions()],
       ["due_date", "Due date", "date"]
     ]
   },
@@ -118,6 +129,7 @@ const config = {
       ["title", "Plan item", "text"],
       ["owner", "Owner", "hidden", "currentUser"],
       ["status", "Status", "select", ["Planned", "Doing", "Parked", "Done", "Carry on tomorrow"]],
+      ["project_key", "Project", "select", projectOptions()],
       ["notes", "Notes / updates", "textarea"],
       ["updated_by", "Updated by", "hidden", "currentUser"]
     ]
@@ -130,6 +142,7 @@ const config = {
       ["platform", "Platform", "select", ["Instagram", "Facebook", "TikTok", "LinkedIn", "Google Business Profile", "All channels"]],
       ["content_type", "Content type", "select", ["Post", "Story", "Reel", "Poll", "Review", "Case study", "Showroom update", "Offer"]],
       ["status", "Status", "select", ["Idea", "Planned", "Scheduled", "Posted", "Parked"]],
+      ["project_key", "Project", "select", projectOptions()],
       ["scheduled_for", "Scheduled for", "date"],
       ["owner", "Owner", "hidden", "currentUser"],
       ["notes", "Notes / caption draft", "textarea"]
@@ -151,6 +164,7 @@ const config = {
       ["title", "Title", "text"],
       ["section", "Section", "select", ["Immediate Actions", "Website, Residential Foundation & SEO", "Social Media", "Print, Sales & Showroom", "AdminBase, Messaging & Long-Term Touchpoints", "Custom"]],
       ["effort", "Effort", "select", ["easy", "medium", "complex"]],
+      ["project_key", "Project", "select", projectOptions()],
       ["detail", "Detail", "textarea"],
       ["status", "Status", "select", ["Active", "Parked", "Done"]]
     ]
@@ -164,6 +178,7 @@ const config = {
       ["asset_type", "Asset type", "select", ["Photo", "Video", "Review", "Case study", "Showroom", "Product info"]],
       ["deadline", "Deadline", "date"],
       ["status", "Status", "select", ["Needed", "Requested", "Received", "Used"]],
+      ["project_key", "Project", "select", projectOptions()],
       ["detail", "Detail", "textarea"]
     ]
   },
@@ -174,6 +189,7 @@ const config = {
       ["title", "Title", "text"],
       ["area", "Area", "select", ["Homepage", "Product page", "Gallery", "SEO", "Forms", "Tracking", "Changelog"]],
       ["status", "Status", "select", ["Plan", "Active", "Parked", "Done"]],
+      ["project_key", "Project", "select", projectOptions()],
       ["release_date", "Release date", "date"],
       ["detail", "Detail", "textarea"]
     ]
@@ -185,7 +201,20 @@ const config = {
       ["title", "Title", "text"],
       ["shipped_at", "Shipped at", "date"],
       ["area", "Area", "select", ["Marketing", "Website", "Content", "Tools", "Operations"]],
+      ["project_key", "Project", "select", projectOptions()],
       ["detail", "Detail", "textarea"]
+    ]
+  },
+  daily_reports: {
+    table: "daily_reports",
+    title: "Daily report",
+    fields: [
+      ["title", "Title", "hidden", "dailyReportTitle"],
+      ["report_date", "Date", "date"],
+      ["body", "What changed today?", "textarea"],
+      ["wins", "Wins / outcomes", "textarea"],
+      ["blockers", "Blockers / follow-up", "textarea"],
+      ["updated_by", "Updated by", "hidden", "currentUser"]
     ]
   }
 };
@@ -195,6 +224,8 @@ let fensterState = null;
 let fensterTab = "awaiting";
 let selectedFensterConversationId = null;
 let current = "dashboard";
+let selectedProjectKey = "";
+let selectedReportDate = new Date().toISOString().slice(0, 10);
 let user = null;
 let ticketSearch = "";
 let refreshTimer = null;
@@ -285,9 +316,9 @@ async function refreshDashboard() {
     const next = normalizeState(await api("/api/bootstrap"));
     notifyNewItems(next);
     state = next;
-    if (current === "tools") {
+    if (current === "projects" && selectedProjectKey === "tools") {
       await api("/api/fenster/meta/sync", { method: "POST", body: {} });
-      await loadFenster();
+      await loadFenster(true);
     }
     else render();
   } catch (error) {
@@ -361,11 +392,10 @@ function render() {
   const renderers = {
     dashboard: renderDashboard,
     projects: renderProjects,
-    inbox: renderInbox,
+    tickets: renderTickets,
     plan: renderPlan,
-    achievements: renderAchievements,
-    social: renderSocial,
-    tools: renderTools
+    completed: renderCompleted,
+    social: renderSocial
   };
 
   (renderers[current] || renderDashboard)();
@@ -640,6 +670,7 @@ function allProjects() {
       owner: "Zac",
       requester: "",
       source: "Action plan",
+      projectKey: projectKeyFor(item, "action_plan_items"),
       status: item.status || "Active",
       stage: item.status === "Done" ? "Done" : item.status === "Parked" ? "Parked" : "Active",
       urgent: item.effort === "complex",
@@ -675,12 +706,75 @@ function projectFromRecord(table, item, extras = {}) {
     owner: extras.owner || item.owner || "Zac",
     requester: extras.requester || "",
     source: config[table]?.title || table,
+    projectKey: projectKeyFor(item, table),
     status: item.status || item.lane || "",
     stage: extras.stage || "Active",
     urgent: Boolean(extras.urgent),
     updated: item.updated_at || item.created_at || item.release_date || item.scheduled_for || "",
     raw: item
   };
+}
+
+function projectOptions() {
+  return projectAreas.map((project) => project.key);
+}
+
+function projectName(key) {
+  return projectAreas.find((project) => project.key === key)?.name || "Misc";
+}
+
+function projectItems(key) {
+  return allProjects().filter((project) => project.projectKey === key);
+}
+
+function projectKeyFor(item, table) {
+  return item.project_key || inferProjectKey(item, table);
+}
+
+function inferProjectKey(item, table) {
+  if (table === "website_updates") return "website";
+  if (table === "social_posts" || table === "social_guidelines") return "social-media";
+  if (table === "tasks") return "misc";
+  const text = [item.title, item.detail, item.notes, item.category, item.asset_type, item.area, item.section].join(" ").toLowerCase();
+  if (/\b(meta bot|bot|cloudflare|dashboard|app|application|automation|worker|ai)\b/.test(text)) return "application-development";
+  if (/\b(website|webpage|homepage|seo|form|tracking|page|gallery)\b/.test(text)) return "website";
+  if (/\b(brochure|leaflet|print|sales sheet|slides|plaque|showroom|van|qr)\b/.test(text)) return "brochure";
+  if (/\b(social|instagram|facebook|tiktok|linkedin|post|story|reel|review)\b/.test(text)) return "social-media";
+  if (table === "tickets") return "unsorted-tickets";
+  return "misc";
+}
+
+function briefCards(items) {
+  if (!items.length) return `<p class="empty">Nothing here.</p>`;
+  return items.map(briefCard).join("");
+}
+
+function briefCard(project) {
+  return `
+    <article class="brief-card" draggable="true" data-table="${project.table}" data-id="${project.recordId}" data-action-key="${escapeHtml(project.actionKey || "")}">
+      <button class="brief-main" onclick="window.dashboardOpenNotes('${project.table}', ${Number(project.recordId) || 0}, '${project.actionKey ? encodeActionItem(project.raw) : ""}')">
+        <span>${escapeHtml(project.source)}</span>
+        <strong>${escapeHtml(project.title || "Untitled")}</strong>
+        ${project.detail ? `<small>${escapeHtml(project.detail)}</small>` : ""}
+      </button>
+      <div class="brief-side">
+        ${project.urgent ? `<span class="pill priority-urgent">Urgent</span>` : `<span class="pill status-${slug(project.stage)}">${escapeHtml(project.stage)}</span>`}
+        ${linkSelect(project)}
+      </div>
+    </article>
+  `;
+}
+
+function linkSelect(project) {
+  if (!project.recordId) return "";
+  return `
+    <label class="link-select">
+      <span>Link this to</span>
+      <select onchange="window.dashboardLinkProject('${project.table}', ${project.recordId}, this.value)" onclick="event.stopPropagation()">
+        ${projectAreas.map((area) => `<option value="${area.key}" ${project.projectKey === area.key ? "selected" : ""}>${escapeHtml(area.name)}</option>`).join("")}
+      </select>
+    </label>
+  `;
 }
 
 function projectSort(project) {
@@ -848,6 +942,7 @@ function achievementFeed() {
     title: item.title,
     detail: item.detail || "",
     area: item.area || "Marketing",
+    projectKey: projectKeyFor(item, "changelog"),
     date: item.shipped_at || "",
     kind: "Logged"
   }));
@@ -857,6 +952,7 @@ function achievementFeed() {
       title: project.title,
       detail: project.detail || `Completed ${project.type.toLowerCase()} project.`,
       area: project.type || "Project",
+      projectKey: project.projectKey,
       date: project.updated || "",
       kind: "Completed"
     }));
@@ -909,8 +1005,7 @@ function renderDashboard() {
     <section class="command-hero">
       <div>
         <p class="eyebrow">Fenster Marketing OS</p>
-        <h3>Command centre</h3>
-        <p>Focus on the work that proves value: active projects, blockers, urgent requests, and delivered outcomes.</p>
+        <p>Active work, blockers, urgent requests, today, and completed outcomes in one calm view.</p>
       </div>
       <div class="hero-actions">
         <button class="primary-button" onclick="window.dashboardOpen('tickets')">New request</button>
@@ -927,7 +1022,7 @@ function renderDashboard() {
       <section class="panel focus-panel">
         ${panelHeader("Focus now", "The smallest useful view of what needs attention.", urgent.length + waiting.length + active.length)}
         <div class="focus-stack">
-          ${projectCards([...urgent, ...waiting, ...active].slice(0, 6))}
+          ${briefCards([...urgent, ...waiting, ...active].slice(0, 8))}
         </div>
       </section>
       <section class="panel">
@@ -943,52 +1038,103 @@ function renderDashboard() {
 }
 
 function renderProjects() {
-  const projects = allProjects();
-  const stages = ["Active", "Waiting", "Parked", "Done"];
+  if (selectedProjectKey) return renderProjectDetail(selectedProjectKey);
   view.innerHTML = `
-    <div class="board-tools v2-tools">
-      <p><strong>Projects</strong><br>Everything meaningful lives here, whether it started as a ticket, website change, idea, social post, or action-plan item.</p>
-      <div class="board-actions">
-        <button onclick="window.dashboardOpen('ideas')">Capture idea</button>
-        <button onclick="window.dashboardOpen('website_updates')">Website project</button>
-        <button class="primary-button" onclick="window.dashboardOpen('tickets')">New request</button>
-      </div>
-    </div>
-    <div class="project-board">
-      ${stages.map((stage) => `
-        <section class="project-lane" data-project-stage="${stage}">
-          ${columnHeader(stage, projects.filter((project) => project.stage === stage).length)}
-          <div class="project-list">${projectCards(projects.filter((project) => project.stage === stage))}</div>
-        </section>
-      `).join("")}
+    <div class="project-menu">
+      ${projectAreas.map((project) => {
+        const activeCount = projectItems(project.key).filter((item) => item.stage !== "Done").length;
+        const doneCount = projectItems(project.key).filter((item) => item.stage === "Done").length;
+        return `
+          <button class="project-tile" onclick="window.dashboardOpenProject('${project.key}')">
+            <span>${escapeHtml(project.name)}</span>
+            <strong>${activeCount}</strong>
+            <small>${escapeHtml(project.text)}</small>
+            <em>${doneCount} completed</em>
+          </button>
+        `;
+      }).join("")}
     </div>
   `;
 }
 
-function renderInbox() {
-  const inbox = allProjects().filter((project) => project.stage === "Inbox");
-  const rawRequests = (state.tickets || []).filter((item) => item.status === "New");
-  const rawIdeas = (state.ideas || []).filter((item) => item.status === "Inbox");
+function renderProjectDetail(key) {
+  const project = projectAreas.find((item) => item.key === key) || projectAreas.at(-1);
+  if (key === "tools") {
+    view.innerHTML = `
+      <div class="project-detail-head">
+        <button onclick="window.dashboardBackToProjects()">Back to projects</button>
+        <div>
+          <span class="project-source">Project</span>
+          <h3>${escapeHtml(project.name)}</h3>
+          <p>${escapeHtml(project.text)}</p>
+        </div>
+      </div>
+      ${renderToolsPanel()}
+    `;
+    loadFenster(true);
+    return;
+  }
+  const items = projectItems(key);
+  const active = items.filter((item) => !["Done", "Parked"].includes(item.stage));
+  const parked = items.filter((item) => item.stage === "Parked");
+  const done = items.filter((item) => item.stage === "Done");
   view.innerHTML = `
-    <div class="board-tools v2-tools">
-      <p><strong>Inbox</strong><br>Incoming requests and loose ideas. Decide quickly: start it, park it, or log why it matters.</p>
+    <div class="project-detail-head">
+      <button onclick="window.dashboardBackToProjects()">Back to projects</button>
+      <div>
+        <span class="project-source">Project</span>
+        <h3>${escapeHtml(project.name)}</h3>
+        <p>${escapeHtml(project.text)}</p>
+      </div>
       <div class="board-actions">
-        <button onclick="window.dashboardOpen('ideas')">New idea</button>
         <button class="primary-button" onclick="window.dashboardOpen('tickets')">New request</button>
       </div>
     </div>
+    <div class="grid stats project-detail-stats">
+      ${stat("Active", active.length, "Visible work", "#1e6f92")}
+      ${stat("Parked", parked.length, "Paused", "#6c7785")}
+      ${stat("Done", done.length, "Completed", "#12825a")}
+      ${stat("Evidence", achievementFeed().filter((item) => item.projectKey === key).length, "Logged outcomes", "#7057c8")}
+    </div>
     <div class="grid two">
       <section class="panel">
-        ${panelHeader("Triage queue", "Items that have not become active work yet.", inbox.length)}
-        <div class="focus-stack">${projectCards(inbox)}</div>
+        ${panelHeader("Current work", "Done items are hidden here. Use Completed for history.", active.length)}
+        <div class="brief-list">${briefCards(active)}</div>
       </section>
       <section class="panel">
-        ${panelHeader("Where it came from", "Useful context without opening separate table pages.", rawRequests.length + rawIdeas.length)}
-        <div class="compact-list">
-          ${rawRequests.slice(0, 5).map((item) => renderSourceRow("Request", item.title, item.requester || "Team", item.category)).join("")}
-          ${rawIdeas.slice(0, 5).map((item) => renderSourceRow("Idea", item.title, item.author || "Team", item.impact)).join("")}
-        </div>
+        ${panelHeader("Parked", "Things to keep but not look at all day.", parked.length)}
+        <div class="brief-list">${briefCards(parked)}</div>
       </section>
+    </div>
+  `;
+}
+
+function renderTickets() {
+  const tickets = filteredTickets();
+  const active = tickets.filter((item) => item.status !== "Done");
+  view.innerHTML = `
+    <div class="ticket-toolbar">
+      <input class="search-input" type="search" placeholder="Search tickets..." value="${escapeHtml(ticketSearch)}" oninput="window.dashboardSearchTickets(this.value)">
+      <button class="primary-button" onclick="window.dashboardOpen('tickets')">New ticket</button>
+    </div>
+    <div class="ticket-project-groups">
+      ${projectAreas.map((project) => {
+        const list = active.filter((ticket) => projectKeyFor(ticket, "tickets") === project.key);
+        if (!list.length && project.key !== "unsorted-tickets") return "";
+        return `
+          <section class="panel ticket-group">
+            ${panelHeader(project.name, project.text, list.length)}
+            <div class="brief-list">${briefCards(list.map((ticket) => projectFromRecord("tickets", ticket, {
+              type: ticket.category || "Ticket",
+              owner: ticket.owner || "Zac",
+              requester: ticket.requester || "",
+              detail: ticket.detail || "",
+              urgent: ["Urgent", "Boss panic mode"].includes(ticket.priority),
+              stage: stageFromTicket(ticket.status)
+            })))}</div>
+          </section>
+        `;
+      }).join("")}
     </div>
   `;
 }
@@ -997,12 +1143,9 @@ function renderPlan() {
   const items = planItems();
   const actionItems = flattenedActionPlan().filter((item) => item.status !== "Deleted");
   view.innerHTML = `
-    <div class="board-tools v2-tools">
-      <p><strong>Plan</strong><br>Daily execution and the wider marketing plan in one place, with less scrolling and fewer duplicate boards.</p>
-      <div class="board-actions">
-        <button onclick="window.dashboardOpen('action_plan_items')">Add action</button>
-        <button class="primary-button" onclick="window.dashboardOpen('todays_plan')">Add today</button>
-      </div>
+    <div class="ticket-toolbar">
+      <button onclick="window.dashboardOpen('action_plan_items')">Add action</button>
+      <button class="primary-button" onclick="window.dashboardOpen('todays_plan')">Add today</button>
     </div>
     <div class="grid two plan-v2">
       <section class="panel">
@@ -1021,28 +1164,27 @@ function renderPlan() {
   `;
 }
 
-function renderAchievements() {
+function renderCompleted() {
   const feed = achievementFeed();
-  const thisWeek = feed.filter((item) => daysAgo(item.date) <= 7);
-  const thisMonth = feed.filter((item) => daysAgo(item.date) <= 31);
+  const reports = state.daily_reports || [];
+  const selected = reportForDate(selectedReportDate);
   view.innerHTML = `
-    <div class="board-tools v2-tools">
-      <p><strong>Achievements</strong><br>Outcome evidence for probation reviews, weekly updates, and future performance conversations.</p>
-      <button class="primary-button" onclick="window.dashboardOpen('changelog')">Log achievement</button>
+    <div class="ticket-toolbar">
+      <button onclick="window.dashboardOpen('changelog')">Log completed project</button>
+      <button class="primary-button" onclick="window.dashboardSaveDailyReport()">Save end-of-day report</button>
     </div>
-    <div class="grid stats">
-      ${stat("This week", thisWeek.length, "Logged outcomes and shipped work", "#1e6f92")}
-      ${stat("This month", thisMonth.length, "Evidence gathered", "#7057c8")}
-      ${stat("Completed projects", allProjects().filter((project) => project.stage === "Done").length, "Delivered project work", "#12825a")}
-      ${stat("Total evidence", feed.length, "Since records began", "#1e6f92")}
-    </div>
-    <div class="grid two achievements-layout">
+    <div class="grid two completed-layout">
       <section class="panel">
-        ${panelHeader("Review summary", "The story you can tell without counting tiny tasks.", feed.length)}
-        ${renderReviewSummary(feed)}
+        ${panelHeader("End-of-day report", "Pick a day, write what changed, and come back to edit it later.", reports.length)}
+        <div class="daily-report-editor">
+          <label>Date<input id="daily-report-date" type="date" value="${escapeHtml(selectedReportDate)}" onchange="window.dashboardSelectReportDate(this.value)"></label>
+          <label>What changed today?<textarea id="daily-report-body">${escapeHtml(selected?.body || "")}</textarea></label>
+          <label>Wins / outcomes<textarea id="daily-report-wins">${escapeHtml(selected?.wins || "")}</textarea></label>
+          <label>Blockers / follow-up<textarea id="daily-report-blockers">${escapeHtml(selected?.blockers || "")}</textarea></label>
+        </div>
       </section>
       <section class="panel">
-        ${panelHeader("Evidence timeline", "Newest first.", feed.length)}
+        ${panelHeader("Completed projects", "Only completed and done work appears here.", feed.length)}
         <div class="timeline">${feed.length ? feed.map(renderAchievement).join("") : `<p class="empty">No achievements yet.</p>`}</div>
       </section>
     </div>
@@ -1204,7 +1346,12 @@ function renderWebsite() {
 }
 
 function renderTools() {
-  view.innerHTML = `
+  view.innerHTML = renderToolsPanel();
+  loadFenster(true);
+}
+
+function renderToolsPanel() {
+  return `
     <section class="panel fenster-tool">
       <div class="panel-header">
         <div>
@@ -1221,13 +1368,12 @@ function renderTools() {
       <div id="fenster-app" class="fenster-app"></div>
     </section>
   `;
-  loadFenster();
 }
 
-async function loadFenster() {
+async function loadFenster(force = false) {
   const mount = $("#fenster-app");
   const status = $("#fenster-status");
-  if (!mount || current !== "tools") return;
+  if (!mount || (!force && current !== "tools")) return;
   try {
     fensterState = await api("/api/fenster/state");
     status.textContent = "";
@@ -1782,11 +1928,14 @@ function openModal(table) {
 
 function fieldHtml([name, label, type, options]) {
   if (type === "hidden") {
-    const value = options === "currentUser" ? user.name : options;
+    const value = options === "currentUser" ? user.name : options === "dailyReportTitle" ? `End of day - ${selectedReportDate}` : options;
     return `<input name="${name}" type="hidden" value="${escapeHtml(value)}">`;
   }
   if (type === "textarea") return `<label>${label}<textarea name="${name}"></textarea></label>`;
   if (type === "select") {
+    if (name === "project_key") {
+      return `<label>${label}<select name="${name}">${projectAreas.map((project) => `<option value="${project.key}">${escapeHtml(project.name)}</option>`).join("")}</select></label>`;
+    }
     return `<label>${label}<select name="${name}">${options.map((option) => `<option>${option}</option>`).join("")}</select></label>`;
   }
   return `<label>${label}<input name="${name}" type="${type}"></label>`;
@@ -1814,6 +1963,7 @@ function withDefaults(table, body) {
       requester: user.name,
       status: "New",
       owner: "Zac",
+      project_key: selectedProjectKey && selectedProjectKey !== "tools" ? selectedProjectKey : "unsorted-tickets",
       ...body
     };
   }
@@ -1822,6 +1972,7 @@ function withDefaults(table, body) {
       owner: user.name,
       updated_by: user.name,
       status: "Planned",
+      project_key: selectedProjectKey || "misc",
       ...body
     };
   }
@@ -1829,6 +1980,7 @@ function withDefaults(table, body) {
     return {
       owner: user.name,
       status: "Idea",
+      project_key: selectedProjectKey || "social-media",
       ...body
     };
   }
@@ -1836,6 +1988,7 @@ function withDefaults(table, body) {
     return {
       author: user.name,
       status: "Inbox",
+      project_key: selectedProjectKey || "misc",
       ...body
     };
   }
@@ -1844,6 +1997,14 @@ function withDefaults(table, body) {
       section: "Custom",
       effort: "medium",
       status: "Active",
+      project_key: selectedProjectKey || "misc",
+      ...body
+    };
+  }
+  if (table === "daily_reports") {
+    return {
+      title: `End of day - ${body.report_date || selectedReportDate}`,
+      updated_by: user.name,
       ...body
     };
   }
@@ -1859,6 +2020,54 @@ function withDefaults(table, body) {
 async function patchRecord(table, id, patch) {
   const updated = await api(`/api/records/${table}`, { method: "PATCH", body: { id, ...patch } });
   state[table] = (state[table] || []).map((item) => item.id === id ? updated : item);
+  render();
+}
+
+async function linkProject(table, id, projectKey) {
+  if (!id || !projectKey) return;
+  await patchRecord(table, id, { project_key: projectKey });
+}
+
+function openProject(key) {
+  selectedProjectKey = key;
+  current = "projects";
+  render();
+}
+
+function backToProjects() {
+  selectedProjectKey = "";
+  current = "projects";
+  render();
+}
+
+function selectReportDate(value) {
+  selectedReportDate = value || new Date().toISOString().slice(0, 10);
+  render();
+}
+
+function reportForDate(date) {
+  return (state.daily_reports || []).find((report) => report.report_date === date);
+}
+
+async function saveDailyReport() {
+  const reportDate = $("#daily-report-date")?.value || selectedReportDate;
+  const body = {
+    title: `End of day - ${reportDate}`,
+    report_date: reportDate,
+    body: $("#daily-report-body")?.value || "",
+    wins: $("#daily-report-wins")?.value || "",
+    blockers: $("#daily-report-blockers")?.value || "",
+    updated_by: user.name
+  };
+  const existing = reportForDate(reportDate);
+  if (existing) {
+    const updated = await api("/api/records/daily_reports", { method: "PATCH", body: { id: existing.id, ...body } });
+    state.daily_reports = (state.daily_reports || []).map((report) => report.id === existing.id ? updated : report);
+  } else {
+    const created = await api("/api/records/daily_reports", { method: "POST", body });
+    state.daily_reports = [created, ...(state.daily_reports || [])];
+  }
+  selectedReportDate = reportDate;
   render();
 }
 
@@ -1957,6 +2166,11 @@ window.dashboardDeleteTicket = deleteTicket;
 window.dashboardDeleteRecord = deleteRecord;
 window.dashboardSearchTickets = searchTickets;
 window.dashboardOpenNotes = openNotes;
+window.dashboardLinkProject = linkProject;
+window.dashboardOpenProject = openProject;
+window.dashboardBackToProjects = backToProjects;
+window.dashboardSelectReportDate = selectReportDate;
+window.dashboardSaveDailyReport = saveDailyReport;
 window.dashboardFilterPlan = filterPlan;
 window.dashboardTogglePlan = togglePlan;
 window.dashboardDeleteActionItem = deleteActionItem;

@@ -420,9 +420,9 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px;
-  align-items: end;
+  align-items: center;
   margin-bottom: 16px;
-  padding: 24px;
+  padding: 18px 20px;
   border: 1px solid rgba(30, 111, 146, 0.2);
   border-radius: 8px;
   background:
@@ -439,8 +439,8 @@ textarea:focus {
 }
 
 .command-hero p {
-  max-width: 760px;
-  margin: 10px 0 0;
+  max-width: 820px;
+  margin: 0;
   color: rgba(255, 255, 255, 0.78);
   line-height: 1.5;
 }
@@ -478,6 +478,174 @@ textarea:focus {
   grid-template-columns: minmax(280px, 1.15fr) minmax(260px, 0.95fr) minmax(240px, 0.82fr) minmax(260px, 0.9fr);
   gap: 14px;
   align-items: start;
+}
+
+.project-menu {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.project-tile {
+  min-height: 190px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 10px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 18px;
+  text-align: left;
+  box-shadow: var(--shadow-small);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.project-tile:hover {
+  border-color: rgba(30, 111, 146, 0.42);
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+}
+
+.project-tile span {
+  color: var(--blue);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.project-tile strong {
+  font-size: 2.4rem;
+  line-height: 1;
+}
+
+.project-tile small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.project-tile em {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.project-detail-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow-small);
+}
+
+.project-detail-head h3 {
+  margin: 0;
+  font-size: 1.45rem;
+}
+
+.project-detail-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.project-detail-head > button,
+.ticket-toolbar button,
+.project-detail-head .board-actions button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+  font-weight: 900;
+}
+
+.ticket-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.ticket-toolbar .search-input {
+  margin-right: auto;
+}
+
+.ticket-project-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.brief-list {
+  display: grid;
+  gap: 8px;
+}
+
+.brief-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.brief-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 0;
+  text-align: left;
+}
+
+.brief-main span {
+  color: var(--blue);
+  font-size: 0.7rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.brief-main strong {
+  overflow-wrap: anywhere;
+}
+
+.brief-main small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.brief-side {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+}
+
+.link-select {
+  display: grid;
+  gap: 4px;
+  min-width: 168px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.link-select select {
+  min-height: 32px;
+  padding: 5px 8px;
+  font-size: 0.78rem;
 }
 
 .project-lane {
@@ -1474,6 +1642,8 @@ dialog::backdrop {
   .fenster-shell,
   .command-layout,
   .project-board,
+  .project-menu,
+  .project-detail-head,
   .action-hero,
   .command-hero,
   .action-row,
@@ -1517,6 +1687,9 @@ dialog::backdrop {
   .fenster-shell,
   .command-layout,
   .project-board,
+  .project-menu,
+  .project-detail-head,
+  .brief-card,
   .command-hero,
   .achievement,
   .action-row,

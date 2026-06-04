@@ -32,8 +32,6 @@ const actionPlan = [
     effort: "easy",
     items: [
       ["Take over Instagram messaging", "Sort the new Instagram messaging process now that Fenster is responsible for it. Aim for fast, friendly replies and make sure no enquiries are left sitting."],
-      ["Reply to reviews", "Track down outstanding Google, Trustpilot or platform reviews and reply to them professionally. This keeps social proof looking active and cared for."],
-      ["Call every lead within the hour", "Every new lead should be called within 1 hour, ideally straight away. Speed to lead should become a basic team rule."],
       ["Update email signatures", "Create cleaner signatures that point people towards the website, showroom, reviews, social pages or Instant Pricing tool."]
     ]
   },
@@ -51,7 +49,6 @@ const actionPlan = [
     section: "Social Media",
     effort: "easy",
     items: [
-      ["Be better than Crown", "Use Crown as the benchmark and make Fenster look more active, more premium, more trustworthy and more helpful online.", "medium"],
       ["Create a quality showreel", "Make a short, polished showreel showing product quality, showroom details, installs, close-ups and finished results.", "medium"],
       ["Set up 3 pinned posts for new customers", "Post 1: why choose Fenster. Post 2: recent work and product quality. Post 3: reviews, showroom and how to get a quote."],
       ["Run regular polls from Stories", "Use polls to make the account feel alive and to get engagement. Keep them simple, visual and relevant to windows, doors, colours, showroom choices or home improvement decisions."],
@@ -79,6 +76,23 @@ const actionPlan = [
       ["Integrate WhatsApp into AdminBase", "Investigate whether WhatsApp can be connected to AdminBase so messages can be sent and managed from there.", "complex"],
       ["Explore unused AdminBase features", "Identify useful AdminBase features Fenster is not currently using, especially around follow-ups, reporting, automation and customer communication.", "complex"]
     ]
+  }
+];
+
+const dailyChecklist = [
+  {
+    title: "Reply to reviews",
+    detail: "Check Google, Trustpilot, social comments, and review platforms. Reply properly where needed.",
+    project_key: "social-media"
+  }
+];
+
+const socialGuidelineDefaults = [
+  {
+    id: "default-crown",
+    title: "Benchmark: better than Crown",
+    category: "Brand voice",
+    body: "Fenster should look more active, premium, trustworthy, and helpful than Crown across social media."
   }
 ];
 
@@ -285,7 +299,6 @@ function wireChrome() {
     current = button.dataset.tab;
     render();
   });
-  $("#quick-add").addEventListener("click", () => openModal("tickets"));
   $("#logout").addEventListener("click", async () => {
     await api("/api/logout");
     location.reload();
@@ -423,7 +436,7 @@ function renderTodaysPlan() {
 }
 
 function renderSocial() {
-  const guidelines = state.social_guidelines || [];
+  const guidelines = [...socialGuidelineDefaults, ...(state.social_guidelines || [])];
   const groups = ["Idea", "Planned", "Scheduled", "Posted", "Parked"];
   const posts = state.social_posts || [];
   const visible = selectedSocialFilter ? posts.filter((item) => item.status === selectedSocialFilter) : [];
@@ -472,6 +485,7 @@ function socialSummary(group) {
 }
 
 function renderGuideline(item) {
+  const isSaved = Number.isFinite(Number(item.id));
   return `
     <article class="guideline">
       <header>
@@ -479,13 +493,15 @@ function renderGuideline(item) {
           <h4>${escapeHtml(item.title)}</h4>
           <span class="pill">${escapeHtml(item.category || "General")}</span>
         </div>
-        <details class="card-menu brief-menu">
-          <summary aria-label="More actions">...</summary>
-          <div class="menu-popover">
-            <button onclick="window.dashboardOpenNotes('social_guidelines', ${item.id})">Notes</button>
-            <button class="danger-action" onclick="window.dashboardDeleteRecord('social_guidelines', ${item.id})">Delete</button>
-          </div>
-        </details>
+        ${isSaved ? `
+          <details class="card-menu brief-menu">
+            <summary aria-label="More actions">...</summary>
+            <div class="menu-popover">
+              <button onclick="window.dashboardOpenNotes('social_guidelines', ${item.id})">Notes</button>
+              <button class="danger-action" onclick="window.dashboardDeleteRecord('social_guidelines', ${item.id})">Delete</button>
+            </div>
+          </details>
+        ` : ""}
       </header>
       <p>${escapeHtml(item.body || "")}</p>
     </article>
@@ -556,6 +572,7 @@ function flattenedActionPlan() {
     detail: entry[1],
     effort: entry[2] || section.effort,
     status: "Active",
+    project_key: defaultProjectKeyForAction(section.section, entry[0], entry[1]),
     customId: null
   } : entry)).filter((item) => item.status !== "Deleted");
 }
@@ -574,6 +591,7 @@ function actionPlanSections() {
       detail: item.detail || "",
       effort: item.effort || "medium",
       status: item.status || "Active",
+      project_key: item.project_key || defaultProjectKeyForAction(item.section, item.title, item.detail),
       customId: item.id
     };
     const existingIndex = target.items.findIndex((entry) => {
@@ -584,6 +602,15 @@ function actionPlanSections() {
     else target.items.push(record);
   }
   return sections;
+}
+
+function defaultProjectKeyForAction(section = "", title = "", detail = "") {
+  const text = `${section} ${title} ${detail}`.toLowerCase();
+  if (text.includes("social") || text.includes("instagram") || text.includes("story") || text.includes("reel") || text.includes("post")) return "social-media";
+  if (text.includes("website") || text.includes("seo") || text.includes("residential") || text.includes("qr code")) return "website";
+  if (text.includes("plaque") || text.includes("slides") || text.includes("leaflet") || text.includes("showroom")) return "brochure";
+  if (text.includes("adminbase") || text.includes("whatsapp") || text.includes("ai") || text.includes("automation")) return "application-development";
+  return "misc";
 }
 
 function actionPlanKey(item) {
@@ -631,10 +658,28 @@ async function actionItemToTask(encoded) {
   const item = decodeActionItem(encoded);
   const created = await api("/api/records/tasks", {
     method: "POST",
-    body: { title: item.title, lane: "Today", owner: user.name, due_date: "" }
+    body: { title: item.title, lane: "Today", owner: user.name, project_key: item.project_key || defaultProjectKeyForAction(item.section, item.title, item.detail), due_date: "" }
   });
   state.tasks = [created, ...(state.tasks || [])];
-  alert("Added to Roadmap as a task.");
+  alert("Added to Plan as a task.");
+}
+
+async function addChecklistItem(title) {
+  const item = dailyChecklist.find((entry) => entry.title === title);
+  if (!item) return;
+  const created = await api("/api/records/todays_plan", {
+    method: "POST",
+    body: {
+      title: item.title,
+      owner: user.name,
+      status: "Planned",
+      project_key: item.project_key || "misc",
+      notes: item.detail,
+      updated_by: user.name
+    }
+  });
+  state.todays_plan = [created, ...(state.todays_plan || [])];
+  render();
 }
 
 async function patchActionPlanItem(item, patch, options = {}) {
@@ -650,7 +695,8 @@ async function patchActionPlanItem(item, patch, options = {}) {
         section: item.section || "Custom",
         effort: item.effort || "medium",
         detail: item.detail || "",
-        status: patch.status || "Active"
+        status: patch.status || item.status || "Active",
+        project_key: patch.project_key || item.project_key || defaultProjectKeyForAction(item.section, item.title, item.detail)
       }
     });
     state.action_plan_items = [saved, ...(state.action_plan_items || [])];
@@ -799,7 +845,7 @@ function briefMenu(project) {
     <details class="card-menu brief-menu">
       <summary aria-label="More actions">...</summary>
       <div class="menu-popover">
-        ${project.recordId ? linkSelect(project) : ""}
+        ${project.table === "action_plan_items" ? actionLinkSelect(project.raw) : linkSelect(project)}
         ${project.table === "action_plan_items" ? actionStatusButtons(project.raw) : statusButtons(project)}
       </div>
     </details>
@@ -813,6 +859,20 @@ function linkSelect(project) {
       <span>Link this to</span>
       <select onchange="window.dashboardLinkProject('${project.table}', ${project.recordId}, this.value)" onclick="event.stopPropagation()">
         ${projectAreas.map((area) => `<option value="${area.key}" ${project.projectKey === area.key ? "selected" : ""}>${escapeHtml(area.name)}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function actionLinkSelect(item) {
+  if (!item) return "";
+  const selected = item.project_key || defaultProjectKeyForAction(item.section, item.title, item.detail);
+  const encoded = encodeActionItem(item);
+  return `
+    <label class="link-select">
+      <span>Link this to</span>
+      <select onchange="window.dashboardLinkActionItem('${encoded}', this.value)" onclick="event.stopPropagation()">
+        ${projectAreas.map((area) => `<option value="${area.key}" ${selected === area.key ? "selected" : ""}>${escapeHtml(area.name)}</option>`).join("")}
       </select>
     </label>
   `;
@@ -939,12 +999,12 @@ function planItems() {
     owner: item.owner || "Zac",
     when: item.status === "Carry on tomorrow" ? "This week" : "Today"
   }));
-  const tasks = (state.tasks || []).filter((item) => !Number(item.done)).map((item) => ({
+  const tasks = (state.tasks || []).map((item) => ({
     table: "tasks",
     id: item.id,
     title: item.title,
     detail: item.due_date ? `Due ${item.due_date}` : "",
-    status: item.lane || "Today",
+    status: Number(item.done) ? "Done" : item.lane || "Today",
     owner: item.owner || "Zac",
     when: item.lane === "Today" ? "Today" : "This week"
   }));
@@ -973,6 +1033,12 @@ function renderPlanRow(item) {
 
 function planRowActions(item) {
   if (item.table === "tasks") {
+    if (item.status === "Done") {
+      return `
+        <button onclick="window.dashboardPatch('tasks', ${item.id}, {done: 0, lane: 'Today'})">Restore today</button>
+        <button class="danger-action" onclick="window.dashboardDeleteRecord('tasks', ${item.id})">Delete</button>
+      `;
+    }
     return `
       <button onclick="window.dashboardPatch('tasks', ${item.id}, {done: 1})">Done</button>
       <button onclick="window.dashboardPatch('tasks', ${item.id}, {lane: 'Later'})">Park</button>
@@ -995,6 +1061,18 @@ function renderActionRow(item) {
       <div class="meta">
         <span class="pill status-${slug(item.effort)}">${effortLabel(item.effort)}</span>
         <span class="pill status-${slug(item.status)}">${escapeHtml(item.status || "Active")}</span>
+      </div>
+      <div class="actions">
+        <button onclick="window.dashboardActionToTask('${encodeActionItem(item)}')">Set as task</button>
+        <button class="note-button" onclick="window.dashboardOpenNotes('action_plan_items', ${item.customId || 0}, '${encodeActionItem(item)}')">${noteBadge("action_plan_items", item.customId)}</button>
+        <details class="card-menu brief-menu">
+          <summary aria-label="More actions">...</summary>
+          <div class="menu-popover">
+            ${actionLinkSelect(item)}
+            ${actionStatusButtons(item)}
+            <button class="danger-action" onclick="window.dashboardDeleteActionItem('${encodeActionItem(item)}')">Delete</button>
+          </div>
+        </details>
       </div>
     </article>
   `;
@@ -1235,28 +1313,53 @@ function ticketSummary(status) {
 
 function renderPlan() {
   const items = planItems();
-  const visibleItems = showPlanDone ? items : items.filter((item) => item.status !== "Done");
+  const visibleItems = showPlanDone ? items.filter((item) => item.status === "Done") : items.filter((item) => item.status !== "Done");
   const actionItems = flattenedActionPlan().filter((item) => item.status !== "Deleted" && (showPlanDone || item.status !== "Done"));
+  const todayItems = visibleItems.filter((item) => item.when === "Today");
+  const weekItems = visibleItems.filter((item) => item.when !== "Today");
   view.innerHTML = `
     <div class="ticket-toolbar">
       <button onclick="window.dashboardOpen('action_plan_items')">Add action</button>
       <button class="primary-button" onclick="window.dashboardOpen('todays_plan')">Add today</button>
       <button onclick="window.dashboardTogglePlanDone()">${showPlanDone ? "Hide done" : "Show done"}</button>
     </div>
-    <div class="grid two plan-v2">
+    ${showPlanDone ? `
       <section class="panel">
-        ${panelHeader("Today", "", visibleItems.filter((item) => item.when === "Today").length)}
-        <div class="compact-list">${visibleItems.filter((item) => item.when === "Today").map(renderPlanRow).join("") || `<p class="empty">No plan items for today.</p>`}</div>
+        ${panelHeader("Done", "", visibleItems.length)}
+        <div class="compact-list">${visibleItems.map(renderPlanRow).join("") || `<p class="empty">Nothing done yet.</p>`}</div>
       </section>
-      <section class="panel">
-        ${panelHeader("This week", "", visibleItems.filter((item) => item.when !== "Today").length)}
-        <div class="compact-list">${visibleItems.filter((item) => item.when !== "Today").slice(0, 12).map(renderPlanRow).join("") || `<p class="empty">No weekly work queued.</p>`}</div>
+    ` : `
+      <div class="grid two plan-v2">
+        <section class="panel">
+          ${panelHeader("Today", "", todayItems.length)}
+          <div class="compact-list">${todayItems.map(renderPlanRow).join("") || `<p class="empty">No plan items for today.</p>`}</div>
+        </section>
+        <section class="panel">
+          ${panelHeader("This week", "", weekItems.length)}
+          <div class="compact-list">${weekItems.slice(0, 12).map(renderPlanRow).join("") || `<p class="empty">No weekly work queued.</p>`}</div>
+        </section>
+      </div>
+      <section class="panel daily-checklist">
+        ${panelHeader("Daily checklist", "", dailyChecklist.length)}
+        <div class="compact-list">${dailyChecklist.map(renderDailyChecklistRow).join("")}</div>
       </section>
-    </div>
+    `}
     <section class="panel action-library">
-      ${panelHeader("Marketing action library", "", actionItems.length)}
+      ${panelHeader("Action ideas to place", "", actionItems.length)}
       <div class="action-list">${actionItems.map(renderActionRow).join("")}</div>
     </section>
+  `;
+}
+
+function renderDailyChecklistRow(item) {
+  return `
+    <article class="compact-row">
+      <div>
+        <strong>${escapeHtml(item.title)}</strong>
+        <span>${escapeHtml(item.detail)}</span>
+      </div>
+      <button onclick="window.dashboardAddChecklistItem('${escapeHtml(item.title)}')">Add today</button>
+    </article>
   `;
 }
 
@@ -2145,6 +2248,11 @@ async function moveActionItem(encodedAction, status) {
   await patchActionPlanItem(decodeActionItem(encodedAction), { status });
 }
 
+async function linkActionItem(encodedAction, projectKey) {
+  if (!encodedAction || !projectKey) return;
+  await patchActionPlanItem(decodeActionItem(encodedAction), { project_key: projectKey });
+}
+
 function selectTickets(status) {
   selectedTicketFilter = selectedTicketFilter === status ? "" : status;
   render();
@@ -2301,6 +2409,7 @@ window.dashboardOpenNotes = openNotes;
 window.dashboardLinkProject = linkProject;
 window.dashboardMoveProject = moveProject;
 window.dashboardMoveActionItem = moveActionItem;
+window.dashboardLinkActionItem = linkActionItem;
 window.dashboardOpenProject = openProject;
 window.dashboardBackToProjects = backToProjects;
 window.dashboardSelectTickets = selectTickets;
@@ -2312,6 +2421,7 @@ window.dashboardFilterPlan = filterPlan;
 window.dashboardTogglePlan = togglePlan;
 window.dashboardDeleteActionItem = deleteActionItem;
 window.dashboardActionToTask = actionItemToTask;
+window.dashboardAddChecklistItem = addChecklistItem;
 window.dashboardFensterRefresh = loadFenster;
 window.dashboardFensterSeed = fensterSeed;
 window.dashboardFensterSync = fensterSync;

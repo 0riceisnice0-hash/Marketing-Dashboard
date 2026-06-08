@@ -443,15 +443,19 @@ async function fensterConversationAction(env, request, id, action, user) {
   if (action === "send") {
     if (body.confirm !== `SEND:${id}`) return json({ error: "Send confirmation missing; message was not sent." }, 400);
     const text = String(body.text || conversation.draft || "").trim();
-    if (conversation.decision_action !== "REPLY") return json({ error: "This conversation is not approved for an automatic reply." }, 400);
+    const manual = body.manual === true;
+    if (conversation.decision_action !== "REPLY" && !manual) {
+      return json({ error: "This conversation needs a manual reply confirmation before sending." }, 400);
+    }
     if (!text) return json({ error: "No reply text provided" }, 400);
     if (text.includes("[Draft unavailable:")) return json({ error: "Draft is unavailable; generate or write a valid reply first." }, 400);
     const result = await sendMetaMessage(env, conversation, text);
     await addFensterMessage(env, id, "outbound", text, result.message_id || "", new Date().toISOString(), result);
+    const note = manual ? "Manual reply written and sent." : "Reply approved and sent.";
     await env.DB.prepare(
       "UPDATE fenster_conversations SET draft = '', draft_status = ?, status = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind("sent", "replied", "Reply approved and sent.", id).run();
-    await fensterEvent(env, "message.sent", { conversationId: id, by: user.name });
+    ).bind("sent", "replied", note, id).run();
+    await fensterEvent(env, "message.sent", { conversationId: id, by: user.name, manual });
     return json({ ok: true, result, conversation: await fensterConversation(env, id) });
   }
 

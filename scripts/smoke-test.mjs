@@ -33,6 +33,7 @@ const env = {
   PASSWORD_ZAC: "test-password",
   PASSWORD_ADAM: "test-password",
   PASSWORD_NICK: "test-password",
+  META_PAGE_ACCESS_TOKEN: "test-meta-token",
   DB: {
     prepare(sql) {
       const statement = { sql, values: [] };
@@ -49,6 +50,20 @@ const env = {
 };
 
 const base = "http://local.test";
+const realFetch = globalThis.fetch;
+const sentMetaMessages = [];
+
+globalThis.fetch = async (url, init = {}) => {
+  if (String(url).includes("graph.facebook.com")) {
+    const payload = JSON.parse(init.body || "{}");
+    sentMetaMessages.push(payload);
+    return new Response(JSON.stringify({ message_id: `sent-${sentMetaMessages.length}` }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  return realFetch(url, init);
+};
 
 const login = await call("/api/login", {
   method: "POST",
@@ -125,7 +140,7 @@ const callbackId = `callback-${forcedUuid++}`;
 tables.fenster_conversations.push({
   id: callbackId,
   channel: "facebook",
-  external_user_id: "demo-callback",
+  external_user_id: "callback-recipient",
   display_name: "Callback Lead",
   status: "new",
   draft: "",
@@ -156,6 +171,35 @@ assert(callbackDecision.status === 200, "callback lead decision should work");
 const callbackData = await callbackDecision.json();
 assert(callbackData.decision_action === "FLAG_HUMAN", "callback leads should flag human");
 assert(callbackData.draft_status === "flag-human", "callback leads should not create a sendable draft");
+
+const manualDraft = await call(`/api/fenster/conversations/${callbackId}/draft`, {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({ draft: "Thanks, I have passed this to the office team and they will follow up with you." })
+});
+
+assert(manualDraft.status === 200, "manual draft should save");
+
+await call(`/api/fenster/conversations/${callbackId}/reject`, {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({ note: "Human reply needed." })
+});
+
+const manualSend = await call(`/api/fenster/conversations/${callbackId}/send`, {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({
+    text: "Thanks, I have passed this to the office team and they will follow up with you.",
+    manual: true,
+    confirm: `SEND:${callbackId}`
+  })
+});
+
+assert(manualSend.status === 200, "manual replies should send after human flag");
+assert(sentMetaMessages.at(-1)?.message?.text.includes("office team"), "manual reply should be sent to Meta");
+const manualSendData = await manualSend.json();
+assert(manualSendData.conversation.internal_note === "Manual reply written and sent.", "manual send should be recorded clearly");
 
 const promptSave = await call("/api/fenster/bot/prompt", {
   method: "POST",
@@ -302,9 +346,15 @@ function run({ sql, values }) {
       item.value = values[1];
       return { meta: {} };
     }
-    const columns = sql.match(/SET (.+), updated_at/)[1].split(",").map((part) => part.split("=")[0].trim());
-    columns.forEach((column, index) => {
-      item[column] = values[index];
+    let valueIndex = 0;
+    const assignments = sql.match(/SET (.+), updated_at/)[1].split(",").map((part) => part.trim());
+    assignments.forEach((assignment) => {
+      const [column, expression] = assignment.split("=").map((part) => part.trim());
+      if (expression === "?") {
+        item[column] = values[valueIndex++];
+      } else {
+        item[column] = expression.replace(/^'(.*)'$/, "$1");
+      }
     });
   }
   if (sql.startsWith("DELETE")) {

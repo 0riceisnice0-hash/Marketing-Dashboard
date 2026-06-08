@@ -1875,10 +1875,13 @@ function renderFensterDetail(conversation) {
   if (!conversation) return `<div class="detail-empty">Select a conversation.</div>`;
   const draftUnavailable = (conversation.draft || "").startsWith("[Draft unavailable:");
   const canGenerate = latestFensterMessageIsInbound(conversation);
-  const canSend = canGenerate && conversation.decision_action === "REPLY" && conversation.draft && !draftUnavailable;
+  const hasDraftText = Boolean((conversation.draft || "").trim());
+  const canSend = canGenerate && hasDraftText && !draftUnavailable;
   const canHide = canGenerate && fensterTab !== "all";
   const decision = conversation.decision_action || "PENDING";
   const decisionClass = decision === "FLAG_HUMAN" ? "danger" : decision === "NO_REPLY" ? "quiet" : "ready";
+  const replyLabel = decision === "REPLY" ? "Suggested reply" : "Manual reply";
+  const sendLabel = decision === "REPLY" ? "Approve and send" : "Send manual reply";
 
   return `
     <div class="detail-head">
@@ -1902,13 +1905,13 @@ function renderFensterDetail(conversation) {
     </div>
     <div class="draft-box">
       <label>
-        Suggested reply
+        ${replyLabel}
         <textarea id="fenster-draft">${escapeHtml(conversation.draft || "")}</textarea>
       </label>
       <div class="draft-actions">
         <button onclick="window.dashboardFensterGenerate()" ${canGenerate ? "" : "disabled"}>Generate draft</button>
         <button onclick="window.dashboardFensterSaveDraft()">Save edit</button>
-        <button class="primary-button" onclick="window.dashboardFensterSend()" ${canSend ? "" : "disabled"}>Approve and send</button>
+        <button class="primary-button" onclick="window.dashboardFensterSend()" ${canSend ? "" : "disabled"}>${sendLabel}</button>
         <button onclick="window.dashboardFensterEmailOffice()">Send email to info@</button>
         <button onclick="window.dashboardFensterReject()">Reject decision</button>
         <button onclick="window.dashboardFensterHide()" ${canHide ? "" : "disabled"}>Hide</button>
@@ -2015,11 +2018,13 @@ async function fensterHide() {
 async function fensterSend() {
   if (!selectedFensterConversationId) return;
   const conversation = selectedFensterConversation();
+  const manual = conversation?.decision_action !== "REPLY";
   if (!confirm(`Send this reply to ${conversation?.display_name || "this selected user"}?`)) return;
   await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/send`, {
     method: "POST",
     body: {
       text: $("#fenster-draft")?.value || "",
+      manual,
       confirm: `SEND:${selectedFensterConversationId}`
     }
   }, "Sending reply...");

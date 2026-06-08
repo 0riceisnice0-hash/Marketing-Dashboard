@@ -1876,7 +1876,8 @@ function renderFensterDetail(conversation) {
   const draftUnavailable = (conversation.draft || "").startsWith("[Draft unavailable:");
   const canGenerate = latestFensterMessageIsInbound(conversation);
   const hasDraftText = Boolean((conversation.draft || "").trim());
-  const canSend = canGenerate && hasDraftText && !draftUnavailable;
+  const canManualSend = conversation.decision_action !== "REPLY";
+  const canSend = canGenerate && !draftUnavailable && (hasDraftText || canManualSend);
   const canHide = canGenerate && fensterTab !== "all";
   const decision = conversation.decision_action || "PENDING";
   const decisionClass = decision === "FLAG_HUMAN" ? "danger" : decision === "NO_REPLY" ? "quiet" : "ready";

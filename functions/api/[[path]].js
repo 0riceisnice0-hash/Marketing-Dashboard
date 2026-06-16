@@ -412,9 +412,16 @@ async function fensterConversationAction(env, request, id, action, user) {
   const body = await request.json().catch(() => ({}));
 
   if (action === "draft") {
+    const existingHandoff = conversation.decision_action === "FLAG_HUMAN";
     await env.DB.prepare(
       "UPDATE fenster_conversations SET draft = ?, draft_status = ?, decision_action = ?, internal_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind(String(body.draft || ""), "draft", "REPLY", "Manual reply edit saved for approval.", id).run();
+    ).bind(
+      String(body.draft || ""),
+      existingHandoff ? "flag-human" : "draft",
+      existingHandoff ? "FLAG_HUMAN" : "REPLY",
+      existingHandoff ? "Manual reply saved; conversation remains assigned to a human." : "Manual reply edit saved for approval.",
+      id
+    ).run();
     await fensterEvent(env, "draft.updated", { conversationId: id, by: user.name });
     return json(await fensterConversation(env, id));
   }
@@ -581,6 +588,8 @@ async function safeGenerateDecision(env, conversation) {
 }
 
 async function generateDecision(env, conversation) {
+  const existingHandoff = humanHandoffDecision(conversation);
+  if (existingHandoff) return existingHandoff;
   const prefilter = localDecision(conversation);
   if (prefilter) return prefilter;
   if (!env.OPENAI_API_KEY) return flagHuman("OpenAI key missing. Human review needed.");
@@ -678,6 +687,11 @@ function normaliseDecision(raw) {
 
 function flagHuman(reason) {
   return { action: "FLAG_HUMAN", reply: "", internal_note: reason };
+}
+
+function humanHandoffDecision(conversation) {
+  if (conversation?.decision_action !== "FLAG_HUMAN") return null;
+  return flagHuman(conversation.internal_note || "Conversation is already assigned to a human. Do not auto-reply.");
 }
 
 function noReply(reason) {

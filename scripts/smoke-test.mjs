@@ -235,6 +235,9 @@ const manualDraft = await call(`/api/fenster/conversations/${callbackId}/draft`,
 });
 
 assert(manualDraft.status === 200, "manual draft should save");
+const manualDraftData = await manualDraft.json();
+assert(manualDraftData.decision_action === "FLAG_HUMAN", "manual drafts on human handoffs should keep the thread human-owned");
+assert(manualDraftData.draft_status === "flag-human", "manual drafts on human handoffs should not become auto-approvable drafts");
 
 await call(`/api/fenster/conversations/${callbackId}/reject`, {
   method: "POST",
@@ -256,6 +259,28 @@ assert(manualSend.status === 200, "manual replies should send after human flag")
 assert(sentMetaMessages.at(-1)?.message?.text.includes("office team"), "manual reply should be sent to Meta");
 const manualSendData = await manualSend.json();
 assert(manualSendData.conversation.internal_note === "Manual reply written and sent.", "manual send should be recorded clearly");
+assert(manualSendData.conversation.decision_action === "FLAG_HUMAN", "manual send should not clear the human-owned thread flag");
+
+tables.fenster_messages.push({
+  id: `message-${forcedUuid++}`,
+  conversation_id: callbackId,
+  external_id: "callback-followup",
+  direction: "inbound",
+  text: "Also can you send me the instant pricing link please?",
+  raw_json: "{}",
+  created_at: new Date().toISOString()
+});
+
+const followupDecision = await call(`/api/fenster/conversations/${callbackId}/generate-draft`, {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: "{}"
+});
+
+assert(followupDecision.status === 200, "follow-up on human-owned thread should process");
+const followupData = await followupDecision.json();
+assert(followupData.decision_action === "FLAG_HUMAN", "human-owned threads should stay human-owned after later replyable messages");
+assert(followupData.draft_status === "flag-human", "human-owned follow-ups should not create sendable drafts");
 
 const promptSave = await call("/api/fenster/bot/prompt", {
   method: "POST",

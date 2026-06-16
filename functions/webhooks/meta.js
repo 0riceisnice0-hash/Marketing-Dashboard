@@ -133,6 +133,8 @@ async function safeGenerateDecision(env, conversation) {
 }
 
 async function generateDecision(env, conversation) {
+  const existingHandoff = humanHandoffDecision(conversation);
+  if (existingHandoff) return existingHandoff;
   const prefilter = localDecision(conversation);
   if (prefilter) return prefilter;
   if (!env.OPENAI_API_KEY) return flagHuman("OpenAI key missing. Human review needed.");
@@ -244,6 +246,11 @@ function normaliseDecision(raw) {
 
 function flagHuman(reason) {
   return { action: "FLAG_HUMAN", reply: "", internal_note: reason };
+}
+
+function humanHandoffDecision(conversation) {
+  if (conversation?.decision_action !== "FLAG_HUMAN") return null;
+  return flagHuman(conversation.internal_note || "Conversation is already assigned to a human. Do not auto-reply.");
 }
 
 function noReply(reason) {

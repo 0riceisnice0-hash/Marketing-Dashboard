@@ -296,12 +296,11 @@ function localDecision(conversation) {
 async function notifyLeadIfNeeded(env, conversation, decision) {
   if (decision.action !== "FLAG_HUMAN") return;
   if (conversation.lead_notified_at) return;
-  if (!isLeadConversation(conversation, decision)) return;
 
   if (!env.LEAD_EMAIL_WEBHOOK_URL || !env.LEAD_EMAIL_WEBHOOK_SECRET) {
     await recordEvent(env, "lead.email_missing", {
       conversationId: conversation.id,
-      internal_note: "Lead detected, but lead email Worker secrets are not configured."
+      internal_note: "Human handoff detected, but lead email Worker secrets are not configured."
     });
     return;
   }
@@ -361,12 +360,6 @@ async function queueBotDecisionIfActive(env, conversation, decision, messageId =
   if (decision.action === "NO_REPLY") {
     await recordEvent(env, "bot.no_reply", { conversationId: conversation.id, messageId: latestMessageId, reason: decision.internal_note || "" });
   }
-}
-
-function isLeadConversation(conversation, decision) {
-  const latest = latestInboundMessage(conversation);
-  const text = `${latest?.text || ""}\n${decision.reply || ""}`.toLowerCase();
-  return /\b(quote|quotation|price|pricing|cost|estimate|call me|call back|callback|phone me|ring me|book|survey|appointment|measure|visit|come out|windows?|doors?|bifold|composite|patio|french door|roof lantern|replacement)\b/i.test(text);
 }
 
 function hasCallbackDetails(text) {

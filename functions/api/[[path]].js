@@ -726,7 +726,6 @@ function localDecision(conversation) {
 async function notifyLeadIfNeeded(env, conversation, decision) {
   if (decision.action !== "FLAG_HUMAN") return;
   if (conversation.lead_notified_at) return;
-  if (!isLeadConversation(conversation, decision)) return;
 
   try {
     await sendLeadEmail(env, conversation, decision);
@@ -878,12 +877,6 @@ async function processBotQueue(env, by = "system") {
   }
 
   return { processed, sent, skipped, failed };
-}
-
-function isLeadConversation(conversation, decision) {
-  const latest = latestInboundMessage(conversation);
-  const text = `${latest?.text || ""}\n${decision.reply || ""}`.toLowerCase();
-  return /\b(quote|quotation|price|pricing|cost|estimate|call me|call back|callback|phone me|ring me|book|survey|appointment|measure|visit|come out|windows?|doors?|bifold|composite|patio|french door|roof lantern|replacement)\b/i.test(text);
 }
 
 function hasCallbackDetails(text) {

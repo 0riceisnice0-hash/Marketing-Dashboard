@@ -34,6 +34,8 @@ const env = {
   PASSWORD_ADAM: "test-password",
   PASSWORD_NICK: "test-password",
   META_PAGE_ACCESS_TOKEN: "test-meta-token",
+  LEAD_EMAIL_WEBHOOK_URL: "https://lead-email.test/send",
+  LEAD_EMAIL_WEBHOOK_SECRET: "lead-secret",
   DB: {
     prepare(sql) {
       const statement = { sql, values: [] };
@@ -52,8 +54,24 @@ const env = {
 const base = "http://local.test";
 const realFetch = globalThis.fetch;
 const sentMetaMessages = [];
+const sentLeadEmails = [];
 
 globalThis.fetch = async (url, init = {}) => {
+  if (String(url).includes("lead-email.test")) {
+    const auth = (init.headers?.Authorization || init.headers?.authorization || "").replace(/^Bearer\s+/i, "");
+    if (auth !== env.LEAD_EMAIL_WEBHOOK_SECRET) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const payload = JSON.parse(init.body || "{}");
+    sentLeadEmails.push(payload);
+    return new Response(JSON.stringify({ ok: true, id: `email-${sentLeadEmails.length}` }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
   if (String(url).includes("graph.facebook.com")) {
     const payload = JSON.parse(init.body || "{}");
     sentMetaMessages.push(payload);
@@ -171,6 +189,44 @@ assert(callbackDecision.status === 200, "callback lead decision should work");
 const callbackData = await callbackDecision.json();
 assert(callbackData.decision_action === "FLAG_HUMAN", "callback leads should flag human");
 assert(callbackData.draft_status === "flag-human", "callback leads should not create a sendable draft");
+assert(sentLeadEmails.length === 1, "human-flagged callback leads should email the office automatically");
+assert(callbackData.lead_notified_at, "automatic office emails should stamp lead_notified_at");
+
+const namedStaffId = `staff-${forcedUuid++}`;
+tables.fenster_conversations.push({
+  id: namedStaffId,
+  channel: "facebook",
+  external_user_id: "staff-recipient",
+  display_name: "Staff Request",
+  status: "new",
+  draft: "",
+  draft_status: "none",
+  decision_action: "",
+  internal_note: "",
+  lead_notified_at: "",
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString()
+});
+tables.fenster_messages.push({
+  id: `message-${forcedUuid++}`,
+  conversation_id: namedStaffId,
+  external_id: "staff-message",
+  direction: "inbound",
+  text: "Can Adam see this please?",
+  raw_json: "{}",
+  created_at: new Date().toISOString()
+});
+
+const staffDecision = await call(`/api/fenster/conversations/${namedStaffId}/generate-draft`, {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: "{}"
+});
+
+assert(staffDecision.status === 200, "named staff decision should work");
+const staffData = await staffDecision.json();
+assert(staffData.decision_action === "FLAG_HUMAN", "named staff requests should flag human");
+assert(sentLeadEmails.length === 2, "all human flags should email the office automatically, even without quote keywords");
 
 const manualDraft = await call(`/api/fenster/conversations/${callbackId}/draft`, {
   method: "POST",
@@ -347,11 +403,13 @@ function run({ sql, values }) {
       return { meta: {} };
     }
     let valueIndex = 0;
-    const assignments = sql.match(/SET (.+), updated_at/)[1].split(",").map((part) => part.trim());
+    const assignments = sql.match(/SET (.+?) WHERE/i)[1].split(",").map((part) => part.trim());
     assignments.forEach((assignment) => {
       const [column, expression] = assignment.split("=").map((part) => part.trim());
       if (expression === "?") {
         item[column] = values[valueIndex++];
+      } else if (expression === "CURRENT_TIMESTAMP") {
+        item[column] = new Date().toISOString();
       } else {
         item[column] = expression.replace(/^'(.*)'$/, "$1");
       }

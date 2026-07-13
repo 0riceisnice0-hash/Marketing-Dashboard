@@ -245,6 +245,7 @@ const config = {
 let state = {};
 let fensterState = null;
 let websiteState = null;
+let websiteView = "overview";
 let fensterTab = "awaiting";
 let toolsTab = "meta";
 let selectedFensterConversationId = null;
@@ -1727,6 +1728,12 @@ function setToolsTab(tab) {
   render();
 }
 
+function setWebsiteView(nextView) {
+  if (!['overview', 'customers'].includes(nextView)) return;
+  websiteView = nextView;
+  renderWebsiteTool();
+}
+
 async function loadCurrentTool(force = false) {
   if (toolsTab === "website") return loadWebsite(force);
   return loadFenster(force);
@@ -1752,6 +1759,7 @@ function renderWebsiteTool() {
   const recent = websiteState.recent || [];
   mount.innerHTML = `
     <div class="fenster-metrics">
+      ${fensterMetric(websiteState.uniqueVisitors || 0, `unique visitors / ${websiteState.periodDays || 30} days`)}
       ${fensterMetric(websiteState.journeys || 0, `journeys / ${websiteState.periodDays || 30} days`)}
       ${fensterMetric(websiteState.quoteJourneys || 0, "quote starts")}
       ${fensterMetric(websiteState.forms || 0, "forms sent")}
@@ -1762,6 +1770,11 @@ function renderWebsiteTool() {
       <strong>How the join works</strong>
       <span>An opaque <code>FG2-…</code> reference follows every WindowCAD launch. When WindowCAD calls WordPress, the server records the quote outcome against that journey without sending customer PII here.</span>
     </div>
+    <div class="fenster-tabs website-tabs" aria-label="Website tracker views">
+      <button class="${websiteView === "overview" ? "active" : ""}" onclick="window.dashboardWebsiteView('overview')">Overview</button>
+      <button class="${websiteView === "customers" ? "active" : ""}" onclick="window.dashboardWebsiteView('customers')">Customer database</button>
+    </div>
+    ${websiteView === "customers" ? renderWebsiteCustomers() : `
     <div class="website-recent">
       <div class="panel-header compact">
         <div>
@@ -1776,7 +1789,29 @@ function renderWebsiteTool() {
         </table></div>
       ` : `<p class="empty">No website outcomes yet. The test journey will appear here once the WindowCAD Reference field has returned through the callback.</p>`}
     </div>
+    `}
   `;
+}
+
+function renderWebsiteCustomers() {
+  const visitors = websiteState?.visitors || [];
+  return `
+    <div class="website-recent">
+      <div class="panel-header compact"><div><h3>Customer database</h3><p class="panel-subtitle">Anonymous, consented visitors only. It shows repeat journeys and intent; personal details remain in AdminBase.</p></div></div>
+      ${visitors.length ? `<div class="table-wrap"><table class="table website-events-table"><thead><tr><th>Visitor</th><th>First touch</th><th>Last seen</th><th>Landing page</th><th>Journeys</th><th>Intent</th></tr></thead><tbody>${visitors.map(renderWebsiteVisitor).join("")}</tbody></table></div>` : `<p class="empty">No consented visitors have been recorded yet. Return visits in the same browser will be counted once after this update is live.</p>`}
+    </div>
+  `;
+}
+
+function renderWebsiteVisitor(item) {
+  const source = [item.first_source, item.first_medium, item.first_campaign].filter(Boolean).join(" / ") || "Direct or unknown";
+  const intent = [
+    Number(item.quote_starts || 0) ? `${item.quote_starts} quote starts` : "",
+    Number(item.quotes || 0) ? `${item.quotes} WindowCAD quotes` : "",
+    Number(item.forms || 0) ? `${item.forms} forms` : "",
+    Number(item.contact_clicks || 0) ? `${item.contact_clicks} contact clicks` : ""
+  ].filter(Boolean).join(" · ") || "Browsing";
+  return `<tr><td><code>${escapeHtml(item.visitor_id)}</code></td><td>${escapeHtml(source)}<br><small>${escapeHtml(formatDateTime(item.first_seen_at))}</small></td><td>${escapeHtml(formatDateTime(item.last_seen_at))}</td><td>${escapeHtml(item.first_landing_path || "—")}</td><td>${escapeHtml(String(item.journeys || 0))}</td><td>${escapeHtml(intent)}</td></tr>`;
 }
 
 function renderWebsiteEvent(item) {
@@ -2704,3 +2739,4 @@ window.dashboardFensterReject = fensterReject;
 window.dashboardFensterHide = fensterHide;
 window.dashboardWebsiteRefresh = loadWebsite;
 window.dashboardToolsTab = setToolsTab;
+window.dashboardWebsiteView = setWebsiteView;

@@ -693,6 +693,7 @@ function flagHuman(reason) {
 }
 
 const WEBSITE_EVENT_TYPES = new Set([
+  "visitor_seen",
   "quote_opened",
   "quote_iframe_loaded",
   "form_submitted",
@@ -734,6 +735,11 @@ function websiteJourneyId(value, fallback = "") {
   return /^FG2-[A-Z0-9-]{8,80}$/.test(id) ? id : fallback;
 }
 
+function websiteVisitorId(value) {
+  const id = websiteText(value, 96).toUpperCase();
+  return /^FGV-[A-Z0-9-]{8,80}$/.test(id) ? id : "";
+}
+
 function websiteNumber(value) {
   const amount = Number(value);
   return Number.isFinite(amount) && amount >= 0 && amount < 1000000 ? amount : 0;
@@ -758,8 +764,15 @@ async function websiteEvent({ request, env }) {
   const journeyId = websiteJourneyId(body.journey_id, event === "quote_completed" ? `UNATTRIBUTED-${crypto.randomUUID()}` : "");
   if (!journeyId) return json({ error: "A valid journey reference is required" }, 400, websiteCorsHeaders(origin));
 
+  let visitorId = websiteVisitorId(body.visitor_id);
+  if (!visitorId) {
+    const existingJourney = await env.DB.prepare("SELECT visitor_id FROM website_journeys WHERE journey_id = ?").bind(journeyId).first();
+    visitorId = websiteVisitorId(existingJourney?.visitor_id);
+  }
+
   const data = {
     journeyId,
+    visitorId,
     event,
     occurredAt: new Date().toISOString(),
     pagePath: websiteText(body.page_path, 500),
@@ -776,11 +789,23 @@ async function websiteEvent({ request, env }) {
     priceCurrency: websiteText(body.price_currency, 8) || "GBP"
   };
 
+  if (data.visitorId) {
+    await env.DB.prepare(`
+      INSERT INTO website_visitors (visitor_id, first_seen_at, last_seen_at, first_landing_path, first_source, first_medium, first_campaign, first_content, first_term, first_referrer_host)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(visitor_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+    `).bind(
+      data.visitorId, data.occurredAt, data.occurredAt, data.landingPath, data.source, data.medium,
+      data.campaign, data.content, data.term, data.referrerHost
+    ).run();
+  }
+
   await env.DB.prepare(`
-    INSERT INTO website_journeys (journey_id, first_event_at, last_event_at, landing_path, source, medium, campaign, content, term, referrer_host)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO website_journeys (journey_id, visitor_id, first_event_at, last_event_at, landing_path, source, medium, campaign, content, term, referrer_host)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(journey_id) DO UPDATE SET
       last_event_at = excluded.last_event_at,
+      visitor_id = CASE WHEN website_journeys.visitor_id = '' THEN excluded.visitor_id ELSE website_journeys.visitor_id END,
       landing_path = CASE WHEN website_journeys.landing_path = '' THEN excluded.landing_path ELSE website_journeys.landing_path END,
       source = CASE WHEN website_journeys.source = '' THEN excluded.source ELSE website_journeys.source END,
       medium = CASE WHEN website_journeys.medium = '' THEN excluded.medium ELSE website_journeys.medium END,
@@ -789,7 +814,7 @@ async function websiteEvent({ request, env }) {
       term = CASE WHEN website_journeys.term = '' THEN excluded.term ELSE website_journeys.term END,
       referrer_host = CASE WHEN website_journeys.referrer_host = '' THEN excluded.referrer_host ELSE website_journeys.referrer_host END
   `).bind(
-    data.journeyId, data.occurredAt, data.occurredAt, data.landingPath, data.source, data.medium,
+    data.journeyId, data.visitorId, data.occurredAt, data.occurredAt, data.landingPath, data.source, data.medium,
     data.campaign, data.content, data.term, data.referrerHost
   ).run();
 
@@ -806,9 +831,10 @@ async function websiteEvent({ request, env }) {
 
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
-  const [events, journeys, recent] = await Promise.all([
+  const [events, journeys, uniqueVisitors, recent, visitors] = await Promise.all([
     env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ?").bind(since).first(),
     env.DB.prepare(`
       SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.product_collection, e.price_amount, e.price_currency,
         j.journey_id, j.landing_path, j.source, j.medium, j.campaign
@@ -816,7 +842,21 @@ async function fensterWebsiteState(env) {
       LEFT JOIN website_journeys j ON j.journey_id = e.journey_id
       WHERE e.event_type IN ('form_submitted', 'quote_completed')
       ORDER BY e.occurred_at DESC LIMIT 16
-    `).all()
+    `).all(),
+    env.DB.prepare(`
+      SELECT v.visitor_id, v.first_seen_at, v.last_seen_at, v.first_landing_path, v.first_source, v.first_medium, v.first_campaign,
+        COUNT(DISTINCT j.journey_id) AS journeys,
+        SUM(CASE WHEN e.event_type IN ('quote_opened', 'quote_iframe_loaded') THEN 1 ELSE 0 END) AS quote_starts,
+        SUM(CASE WHEN e.event_type = 'quote_completed' THEN 1 ELSE 0 END) AS quotes,
+        SUM(CASE WHEN e.event_type = 'form_submitted' THEN 1 ELSE 0 END) AS forms,
+        SUM(CASE WHEN e.event_type IN ('phone_click', 'email_click') THEN 1 ELSE 0 END) AS contact_clicks
+      FROM website_visitors v
+      LEFT JOIN website_journeys j ON j.visitor_id = v.visitor_id
+      LEFT JOIN website_events e ON e.journey_id = j.journey_id
+      WHERE v.last_seen_at >= ?
+      GROUP BY v.visitor_id
+      ORDER BY v.last_seen_at DESC LIMIT 100
+    `).bind(since).all()
   ]);
   const totals = Object.fromEntries((events.results || []).map((row) => [row.event_type, Number(row.count || 0)]));
   const quoteJourneys = await env.DB.prepare(`
@@ -827,11 +867,13 @@ async function fensterWebsiteState(env) {
   return json({
     periodDays: 30,
     journeys: Number(journeys?.count || 0),
+    uniqueVisitors: Number(uniqueVisitors?.count || 0),
     quoteJourneys: Number(quoteJourneys?.count || 0),
     forms: totals.form_submitted || 0,
     quotes: totals.quote_completed || 0,
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
-    recent: recent.results || []
+    recent: recent.results || [],
+    visitors: visitors.results || []
   });
 }
 

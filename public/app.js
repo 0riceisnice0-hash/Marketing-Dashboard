@@ -265,6 +265,42 @@ let seenPlanIds = new Set();
 let seenTicketIds = new Set();
 let seenSocialIds = new Set();
 
+const dashboardDraftPrefix = "marketing-dashboard:draft:";
+
+function dashboardDraftKey(field) {
+  return field?.dataset?.dashboardDraft || "";
+}
+
+function rememberDashboardDrafts(scope = document) {
+  scope.querySelectorAll?.("[data-dashboard-draft]").forEach((field) => {
+    const key = dashboardDraftKey(field);
+    if (!key) return;
+    try { sessionStorage.setItem(dashboardDraftPrefix + key, field.value || ""); } catch (_error) {}
+  });
+}
+
+function restoreDashboardDrafts(scope = document) {
+  scope.querySelectorAll?.("[data-dashboard-draft]").forEach((field) => {
+    const key = dashboardDraftKey(field);
+    if (!key) return;
+    try {
+      const saved = sessionStorage.getItem(dashboardDraftPrefix + key);
+      if (saved !== null) field.value = saved;
+    } catch (_error) {}
+  });
+}
+
+function clearDashboardDraft(key) {
+  try { sessionStorage.removeItem(dashboardDraftPrefix + key); } catch (_error) {}
+}
+
+document.addEventListener("input", (event) => {
+  const field = event.target.closest?.("[data-dashboard-draft]");
+  const key = dashboardDraftKey(field);
+  if (!key) return;
+  try { sessionStorage.setItem(dashboardDraftPrefix + key, field.value || ""); } catch (_error) {}
+});
+
 const $ = (selector) => document.querySelector(selector);
 const view = $("#view");
 const modal = $("#modal");
@@ -413,6 +449,7 @@ function sendBrowserNotification(title, body) {
 }
 
 function render() {
+  rememberDashboardDrafts(view);
   $("#view-title").textContent = tabs.find((tab) => tab.id === current)?.label || "Dashboard";
   document.querySelector(".topbar .eyebrow").textContent = viewCopy[current] || "Live marketing command desk";
   document.querySelectorAll("#tabs button").forEach((button) => {
@@ -429,6 +466,7 @@ function render() {
   };
 
   (renderers[current] || renderDashboard)();
+  restoreDashboardDrafts(view);
   wireBoardDragDrop();
 }
 
@@ -1493,7 +1531,7 @@ function renderCompleted() {
         ${panelHeader("End-of-day report", "", reports.length)}
         <div class="daily-report-editor">
           <label>Date<input id="daily-report-date" type="date" value="${escapeHtml(selectedReportDate)}" onchange="window.dashboardSelectReportDate(this.value)"></label>
-          <label>What happened today and what did you do?<textarea id="daily-report-body" placeholder="One useful sentence is enough.">${escapeHtml(selected?.body || selected?.wins || "")}</textarea></label>
+          <label>What happened today and what did you do?<textarea id="daily-report-body" data-dashboard-draft="daily-report:${escapeHtml(selectedReportDate)}" placeholder="One useful sentence is enough.">${escapeHtml(selected?.body || selected?.wins || "")}</textarea></label>
         </div>
         <div class="report-list">
           ${reports.length ? reports.map(renderReportRow).join("") : `<p class="empty">No daily reports yet.</p>`}
@@ -1962,6 +2000,7 @@ async function loadFenster(force = false) {
 function renderFenster() {
   const mount = $("#fenster-app");
   if (!mount || !fensterState) return;
+  rememberDashboardDrafts(mount);
   const conversations = fensterConversations();
   const visible = visibleFensterConversations();
   const awaiting = conversations.filter((item) => latestFensterMessageIsInbound(item) && !isFensterHidden(item)).length;
@@ -2020,7 +2059,7 @@ function renderFenster() {
       </div>
       <label>
         Extra prompt context
-        <textarea id="fenster-prompt-context">${escapeHtml(bot.promptContext || "")}</textarea>
+        <textarea id="fenster-prompt-context" data-dashboard-draft="fenster-prompt">${escapeHtml(bot.promptContext || "")}</textarea>
       </label>
       <div class="actions">
         <button onclick="window.dashboardFensterSavePrompt()">Save AI context</button>
@@ -2050,6 +2089,7 @@ function renderFenster() {
       </section>
     </div>
   `;
+  restoreDashboardDrafts(mount);
 }
 
 function fensterMetric(value, label) {
@@ -2162,7 +2202,7 @@ function renderFensterDetail(conversation) {
     <div class="draft-box">
       <label>
         ${replyLabel}
-        <textarea id="fenster-draft">${escapeHtml(conversation.draft || "")}</textarea>
+        <textarea id="fenster-draft" data-dashboard-draft="fenster:${escapeHtml(conversation.id)}">${escapeHtml(conversation.draft || "")}</textarea>
       </label>
       <div class="draft-actions">
         <button onclick="window.dashboardFensterGenerate()" ${canGenerate ? "" : "disabled"}>Generate draft</button>
@@ -2205,9 +2245,11 @@ async function fensterAction(path, options = {}, progress = "Working...") {
   try {
     await api(path, options);
     await loadFenster();
+    return true;
   } catch (error) {
     setFensterStatus(error.message);
     alert(error.message);
+    return false;
   }
 }
 
@@ -2245,23 +2287,34 @@ async function fensterStopBot() {
 }
 
 async function fensterSavePrompt() {
-  await fensterAction("/api/fenster/bot/prompt", {
+  const saved = await fensterAction("/api/fenster/bot/prompt", {
     method: "POST",
     body: { promptContext: $("#fenster-prompt-context")?.value || "" }
   }, "Saving AI context...");
+  if (saved) clearDashboardDraft("fenster-prompt");
 }
 
 async function fensterGenerate() {
   if (!selectedFensterConversationId) return;
-  await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/generate-draft`, { method: "POST", body: {} }, "Generating draft...");
+  const key = `fenster:${selectedFensterConversationId}`;
+  const draft = $("#fenster-draft");
+  const previousDraft = draft?.value || "";
+  draft?.removeAttribute("data-dashboard-draft");
+  clearDashboardDraft(key);
+  const generated = await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/generate-draft`, { method: "POST", body: {} }, "Generating draft...");
+  if (!generated && draft) {
+    draft.dataset.dashboardDraft = key;
+    try { sessionStorage.setItem(dashboardDraftPrefix + key, previousDraft); } catch (_error) {}
+  }
 }
 
 async function fensterSaveDraft() {
   if (!selectedFensterConversationId) return;
-  await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/draft`, {
+  const saved = await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/draft`, {
     method: "POST",
     body: { draft: $("#fenster-draft")?.value || "" }
   }, "Saving draft...");
+  if (saved) clearDashboardDraft(`fenster:${selectedFensterConversationId}`);
 }
 
 async function fensterHide() {
@@ -2276,7 +2329,7 @@ async function fensterSend() {
   const conversation = selectedFensterConversation();
   const manual = conversation?.decision_action !== "REPLY";
   if (!confirm(`Send this reply to ${conversation?.display_name || "this selected user"}?`)) return;
-  await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/send`, {
+  const sent = await fensterAction(`/api/fenster/conversations/${selectedFensterConversationId}/send`, {
     method: "POST",
     body: {
       text: $("#fenster-draft")?.value || "",
@@ -2284,6 +2337,7 @@ async function fensterSend() {
       confirm: `SEND:${selectedFensterConversationId}`
     }
   }, "Sending reply...");
+  if (sent) clearDashboardDraft(`fenster:${selectedFensterConversationId}`);
 }
 
 async function fensterEmailOffice() {
@@ -2724,6 +2778,7 @@ async function saveDailyReport() {
     state.daily_reports = [created, ...(state.daily_reports || [])];
   }
   selectedReportDate = reportDate;
+  clearDashboardDraft(`daily-report:${reportDate}`);
   render();
 }
 

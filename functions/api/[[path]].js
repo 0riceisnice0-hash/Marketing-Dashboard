@@ -831,7 +831,7 @@ async function websiteEvent({ request, env }) {
 
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
-  const [events, journeys, uniqueVisitors, recent, visitors] = await Promise.all([
+  const [events, journeys, uniqueVisitors, recent, visitors, acquisition] = await Promise.all([
     env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ?").bind(since).first(),
@@ -857,6 +857,26 @@ async function fensterWebsiteState(env) {
       GROUP BY v.visitor_id
       ORDER BY v.last_seen_at DESC LIMIT 100
     `).bind(since).all()
+    ,env.DB.prepare(`
+      SELECT
+        CASE
+          WHEN j.source <> '' THEN j.source || CASE WHEN j.medium <> '' THEN ' / ' || j.medium ELSE '' END
+          WHEN j.referrer_host <> '' THEN j.referrer_host
+          ELSE 'Direct or unknown'
+        END AS channel,
+        COUNT(DISTINCT NULLIF(j.visitor_id, '')) AS visitors,
+        COUNT(DISTINCT j.journey_id) AS journeys,
+        COUNT(DISTINCT CASE WHEN e.event_type IN ('quote_opened', 'quote_iframe_loaded') THEN j.journey_id END) AS quote_starts,
+        SUM(CASE WHEN e.event_type = 'quote_completed' THEN 1 ELSE 0 END) AS quotes,
+        SUM(CASE WHEN e.event_type = 'form_submitted' THEN 1 ELSE 0 END) AS forms,
+        SUM(CASE WHEN e.event_type IN ('phone_click', 'email_click') THEN 1 ELSE 0 END) AS contact_clicks
+      FROM website_journeys j
+      LEFT JOIN website_events e ON e.journey_id = j.journey_id
+      WHERE j.last_event_at >= ?
+      GROUP BY channel
+      ORDER BY quotes DESC, forms DESC, quote_starts DESC, visitors DESC
+      LIMIT 12
+    `).bind(since).all()
   ]);
   const totals = Object.fromEntries((events.results || []).map((row) => [row.event_type, Number(row.count || 0)]));
   const quoteJourneys = await env.DB.prepare(`
@@ -873,7 +893,8 @@ async function fensterWebsiteState(env) {
     quotes: totals.quote_completed || 0,
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     recent: recent.results || [],
-    visitors: visitors.results || []
+    visitors: visitors.results || [],
+    acquisition: acquisition.results || []
   });
 }
 

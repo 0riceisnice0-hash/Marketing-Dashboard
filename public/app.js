@@ -1770,6 +1770,7 @@ function renderWebsiteTool() {
       <strong>How the join works</strong>
       <span>An opaque <code>FG2-…</code> reference follows every WindowCAD launch. When WindowCAD calls WordPress, the server records the quote outcome against that journey without sending customer PII here.</span>
     </div>
+    ${renderWebsiteDecisionPanel()}
     <div class="fenster-tabs website-tabs" aria-label="Website tracker views">
       <button class="${websiteView === "overview" ? "active" : ""}" onclick="window.dashboardWebsiteView('overview')">Overview</button>
       <button class="${websiteView === "customers" ? "active" : ""}" onclick="window.dashboardWebsiteView('customers')">Customer database</button>
@@ -1791,6 +1792,36 @@ function renderWebsiteTool() {
     </div>
     `}
   `;
+}
+
+function renderWebsiteDecisionPanel() {
+  const visitors = Number(websiteState?.uniqueVisitors || 0);
+  const quoteStarts = Number(websiteState?.quoteJourneys || 0);
+  const quotes = Number(websiteState?.quotes || 0);
+  const forms = Number(websiteState?.forms || 0);
+  const contactClicks = Number(websiteState?.calls || 0);
+  const enquiryRate = visitors ? Math.round(((quotes + forms) / visitors) * 100) : 0;
+  const quoteCompletion = quoteStarts ? Math.round((quotes / quoteStarts) * 100) : 0;
+  const nextStep = visitors < 20
+    ? "This is still early data. Let it run until there are at least 20 consented visitors before using it to judge a channel or page."
+    : quoteStarts === 0
+      ? "Visitors are arriving but not opening the quote tool. Review the first-screen call to action and the routes sending traffic here."
+      : quotes === 0 && forms === 0
+        ? "Visitors are showing intent but not becoming leads. Check the quote journey, call button and form friction before spending more on traffic."
+        : "Compare channels below. Put more budget behind sources that create completed WindowCAD quotes or forms, not just visits.";
+  return `
+    <div class="website-note website-decision-note">
+      <strong>What this helps you decide</strong>
+      <span>${escapeHtml(nextStep)} ${visitors ? `Lead rate: ${enquiryRate}%.` : ""} ${quoteStarts ? `Quote completion: ${quoteCompletion}%.` : ""} ${contactClicks ? `Contact-button taps: ${contactClicks}.` : ""}</span>
+      ${renderWebsiteAcquisition()}
+    </div>
+  `;
+}
+
+function renderWebsiteAcquisition() {
+  const rows = websiteState?.acquisition || [];
+  if (!rows.length) return "";
+  return `<div class="table-wrap website-acquisition"><table class="table website-events-table"><thead><tr><th>Channel</th><th>Visitors</th><th>Quote starts</th><th>Quotes</th><th>Forms</th><th>Contact taps</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.channel || "Direct or unknown")}</td><td>${escapeHtml(String(row.visitors || 0))}</td><td>${escapeHtml(String(row.quote_starts || 0))}</td><td>${escapeHtml(String(row.quotes || 0))}</td><td>${escapeHtml(String(row.forms || 0))}</td><td>${escapeHtml(String(row.contact_clicks || 0))}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 function renderWebsiteCustomers() {

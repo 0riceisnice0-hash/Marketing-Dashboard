@@ -1864,12 +1864,11 @@ function renderWebsiteTool() {
 
 function renderWebsiteConsentHealth() {
   const consent = websiteState?.consent || {};
-  const shown = Number(consent.shown || 0);
   const accepted = Number(consent.accepted || 0);
   const rejected = Number(consent.rejected || 0);
   const answered = accepted + rejected;
   const rate = answered ? Math.round((accepted / answered) * 100) : 0;
-  return `<section class="website-consent-health"><div><span>Consent health</span><h3>How representative is your journey data?</h3><p>Aggregate-only counters. Rejecting visitors are never given a visitor ID or a tracked journey.</p></div><div class="website-consent-health__figures"><article><strong>${shown}</strong><span>Banner shown</span></article><article><strong>${accepted}</strong><span>Accepted</span></article><article><strong>${rejected}</strong><span>Rejected</span></article><article class="website-consent-health__rate"><strong>${rate}%</strong><span>Consent rate</span></article></div></section>`;
+  return `<section class="website-consent-health"><div><span>Consent health</span><h3>How representative is your journey data?</h3><p>Aggregate choices only. Banner impressions are intentionally not counted because anonymous sessions and crawlers make that number unreliable.</p></div><div class="website-consent-health__figures"><article><strong>${answered}</strong><span>Choices recorded</span></article><article><strong>${accepted}</strong><span>Accepted</span></article><article><strong>${rejected}</strong><span>Rejected</span></article><article class="website-consent-health__rate"><strong>${rate}%</strong><span>Acceptance rate</span></article></div></section>`;
 }
 
 function renderWebsiteFunnel() {

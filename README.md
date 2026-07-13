@@ -240,8 +240,9 @@ a clickable chronological journey timeline and a manual non-PII lead status
 If optional cookies are rejected, WindowCAD receives `rejected-cookies`; before
 a choice it receives `cookie-consent-not-accepted`. Those values still reach
 the office/CRM but must never create or join a dashboard journey. Consent health
-uses daily aggregate-only `banner shown`, `accepted` and `rejected` counters,
-with no visitor ID, URL, referrer, device or personal data.
+uses daily aggregate-only `accepted` and `rejected` counters, with no visitor
+ID, URL, referrer, device or personal data. Banner impressions are deliberately
+not counted because anonymous crawler/session traffic makes them unreliable.
 
 Required configuration (never commit either secret):
 

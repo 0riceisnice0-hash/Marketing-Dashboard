@@ -1906,14 +1906,17 @@ function websiteEventLabel(event) {
 function renderWebsiteJourney() {
   const journey = websiteVisitorJourney;
   const events = journey.events || [];
-  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Visitor journey</span><h3><code>${escapeHtml(journey.visitor.visitor_id)}</code></h3><p>${escapeHtml(String(journey.journeys?.length || 0))} tracked journey${journey.journeys?.length === 1 ? "" : "s"} · anonymous and consented</p></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close <b>×</b></button></div>${events.length ? `<div class="website-timeline">${events.map(renderWebsiteJourneyEvent).join("")}</div>` : `<p class="empty">No detailed events yet. Page views and time on page begin collecting from this update onward.</p>`}</section>`;
+  const journeys = journey.journeys || [];
+  const references = journeys.map((item) => `<code>${escapeHtml(item.journey_id)}</code>`).join("");
+  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Visitor journey</span><h3><code>${escapeHtml(journey.visitor.visitor_id)}</code></h3><p>${escapeHtml(String(journeys.length || 0))} tracked journey${journeys.length === 1 ? "" : "s"} · anonymous and consented</p><div class="website-journey-refs"><span>WindowCAD tracking reference${journeys.length === 1 ? "" : "s"}</span>${references || "<em>No WindowCAD journey yet</em>"}</div></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close <b>×</b></button></div>${events.length ? `<div class="website-timeline">${events.map(renderWebsiteJourneyEvent).join("")}</div>` : `<p class="empty">No detailed events yet. Page views and time on page begin collecting from this update onward.</p>`}</section>`;
 }
 
 function renderWebsiteJourneyEvent(event) {
   const duration = Number(event.page_duration_seconds || 0) ? `${event.page_duration_seconds}s on page` : "";
   const value = Number(event.price_amount || 0) > 0 ? `£${Number(event.price_amount).toLocaleString("en-GB", { maximumFractionDigits: 2 })}` : "";
   const eventValue = Number(event.event_value || 0) ? `${event.event_value}%` : "";
-  const detail = [event.cta, event.link_target, event.product_collection, duration, value, eventValue].filter(Boolean).join(" · ") || "—";
+  const trackingReference = event.event_type === "quote_completed" ? `Tracking: ${event.journey_id}` : "";
+  const detail = [event.cta, event.link_target, event.product_collection, duration, value, eventValue, trackingReference].filter(Boolean).join(" · ") || "—";
   return `<article class="website-timeline__event website-timeline__event--${escapeHtml(event.event_type)}"><time>${escapeHtml(formatDateTime(event.occurred_at))}</time><i></i><div><strong>${escapeHtml(websiteEventLabel(event.event_type))}</strong><code>${escapeHtml(event.page_path || "—")}</code><span>${escapeHtml(detail)}</span></div></article>`;
 }
 

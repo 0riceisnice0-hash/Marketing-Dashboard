@@ -197,6 +197,8 @@ async function fenster(context, route, user) {
   if (request.method === "POST" && route === "bot/process") return json(await processBotQueue(env, user.name));
   if (request.method === "POST" && route === "bot/prompt") return fensterUpdatePromptContext(env, request, user);
   if (request.method === "GET" && route === "website/state") return fensterWebsiteState(env);
+  const visitorMatch = route.match(/^website\/visitor\/(FGV-[A-Z0-9-]{8,80})$/i);
+  if (request.method === "GET" && visitorMatch) return fensterWebsiteVisitor(env, visitorMatch[1]);
 
   const draftMatch = route.match(/^conversations\/([^/]+)\/(draft|generate-draft|send|hide|reject|email-office)$/);
   if (draftMatch && request.method === "POST") {
@@ -694,6 +696,9 @@ function flagHuman(reason) {
 
 const WEBSITE_EVENT_TYPES = new Set([
   "visitor_seen",
+  "page_view",
+  "page_engaged",
+  "link_click",
   "quote_opened",
   "quote_iframe_loaded",
   "form_submitted",
@@ -745,6 +750,11 @@ function websiteNumber(value) {
   return Number.isFinite(amount) && amount >= 0 && amount < 1000000 ? amount : 0;
 }
 
+function websiteDuration(value) {
+  const seconds = Math.round(Number(value));
+  return Number.isFinite(seconds) && seconds > 0 && seconds <= 1800 ? seconds : 0;
+}
+
 async function websiteEvent({ request, env }) {
   const origin = request.headers.get("Origin") || "";
   const body = await request.json().catch(() => ({}));
@@ -784,6 +794,8 @@ async function websiteEvent({ request, env }) {
     term: websiteText(body.term, 180),
     referrerHost: websiteText(body.referrer_host, 180),
     cta: websiteText(body.cta, 180),
+    linkTarget: websiteText(body.link_target, 500),
+    pageDurationSeconds: websiteDuration(body.page_duration_seconds),
     productCollection: websiteText(body.product_collection, 120),
     priceAmount: websiteNumber(body.price_amount),
     priceCurrency: websiteText(body.price_currency, 8) || "GBP"
@@ -819,14 +831,35 @@ async function websiteEvent({ request, env }) {
   ).run();
 
   await env.DB.prepare(`
-    INSERT INTO website_events (id, journey_id, event_type, occurred_at, page_path, cta, product_collection, price_amount, price_currency)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO website_events (id, journey_id, event_type, occurred_at, page_path, cta, link_target, page_duration_seconds, product_collection, price_amount, price_currency)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     crypto.randomUUID(), data.journeyId, data.event, data.occurredAt, data.pagePath, data.cta,
-    data.productCollection, data.priceAmount, data.priceCurrency
+    data.linkTarget, data.pageDurationSeconds, data.productCollection, data.priceAmount, data.priceCurrency
   ).run();
 
   return json({ ok: true, journey_id: data.journeyId }, 201, websiteCorsHeaders(origin));
+}
+
+async function fensterWebsiteVisitor(env, value) {
+  const visitorId = websiteVisitorId(value);
+  if (!visitorId) return json({ error: "Invalid visitor" }, 400);
+
+  const [visitor, journeys, events] = await Promise.all([
+    env.DB.prepare("SELECT * FROM website_visitors WHERE visitor_id = ?").bind(visitorId).first(),
+    env.DB.prepare("SELECT journey_id, first_event_at, last_event_at, landing_path, source, medium, campaign FROM website_journeys WHERE visitor_id = ? ORDER BY first_event_at ASC").bind(visitorId).all(),
+    env.DB.prepare(`
+      SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.link_target, e.page_duration_seconds, e.product_collection, e.price_amount, e.price_currency, e.journey_id
+      FROM website_events e
+      INNER JOIN website_journeys j ON j.journey_id = e.journey_id
+      WHERE j.visitor_id = ?
+      ORDER BY e.occurred_at ASC
+      LIMIT 500
+    `).bind(visitorId).all()
+  ]);
+
+  if (!visitor) return json({ error: "Visitor not found" }, 404);
+  return json({ visitor, journeys: journeys.results || [], events: events.results || [] });
 }
 
 async function fensterWebsiteState(env) {

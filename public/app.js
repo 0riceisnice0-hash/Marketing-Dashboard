@@ -246,6 +246,7 @@ let state = {};
 let fensterState = null;
 let websiteState = null;
 let websiteView = "overview";
+let websiteVisitorJourney = null;
 let fensterTab = "awaiting";
 let toolsTab = "meta";
 let selectedFensterConversationId = null;
@@ -1734,6 +1735,21 @@ function setWebsiteView(nextView) {
   renderWebsiteTool();
 }
 
+async function openWebsiteVisitor(visitorId) {
+  try {
+    websiteVisitorJourney = await api(`/api/fenster/website/visitor/${encodeURIComponent(visitorId)}`);
+    renderWebsiteTool();
+  } catch (error) {
+    const status = $("#website-status");
+    if (status) status.textContent = error.message;
+  }
+}
+
+function closeWebsiteVisitor() {
+  websiteVisitorJourney = null;
+  renderWebsiteTool();
+}
+
 async function loadCurrentTool(force = false) {
   if (toolsTab === "website") return loadWebsite(force);
   return loadFenster(force);
@@ -1829,6 +1845,7 @@ function renderWebsiteCustomers() {
   return `
     <div class="website-recent">
       <div class="panel-header compact"><div><h3>Customer database</h3><p class="panel-subtitle">Anonymous, consented visitors only. It shows repeat journeys and intent; personal details remain in AdminBase.</p></div></div>
+      ${websiteVisitorJourney ? renderWebsiteJourney() : ""}
       ${visitors.length ? `<div class="table-wrap"><table class="table website-events-table"><thead><tr><th>Visitor</th><th>First touch</th><th>Last seen</th><th>Landing page</th><th>Journeys</th><th>Intent</th></tr></thead><tbody>${visitors.map(renderWebsiteVisitor).join("")}</tbody></table></div>` : `<p class="empty">No consented visitors have been recorded yet. Return visits in the same browser will be counted once after this update is live.</p>`}
     </div>
   `;
@@ -1842,7 +1859,24 @@ function renderWebsiteVisitor(item) {
     Number(item.forms || 0) ? `${item.forms} forms` : "",
     Number(item.contact_clicks || 0) ? `${item.contact_clicks} contact clicks` : ""
   ].filter(Boolean).join(" · ") || "Browsing";
-  return `<tr><td><code>${escapeHtml(item.visitor_id)}</code></td><td>${escapeHtml(source)}<br><small>${escapeHtml(formatDateTime(item.first_seen_at))}</small></td><td>${escapeHtml(formatDateTime(item.last_seen_at))}</td><td>${escapeHtml(item.first_landing_path || "—")}</td><td>${escapeHtml(String(item.journeys || 0))}</td><td>${escapeHtml(intent)}</td></tr>`;
+  return `<tr><td><button class="link-button" onclick="window.dashboardWebsiteVisitor('${escapeHtml(item.visitor_id)}')"><code>${escapeHtml(item.visitor_id)}</code></button></td><td>${escapeHtml(source)}<br><small>${escapeHtml(formatDateTime(item.first_seen_at))}</small></td><td>${escapeHtml(formatDateTime(item.last_seen_at))}</td><td>${escapeHtml(item.first_landing_path || "—")}</td><td>${escapeHtml(String(item.journeys || 0))}</td><td>${escapeHtml(intent)}</td></tr>`;
+}
+
+function websiteEventLabel(event) {
+  return ({ visitor_seen: "Visitor returned", page_view: "Viewed page", page_engaged: "Time on page", link_click: "Clicked link", quote_opened: "Opened quote tool", quote_iframe_loaded: "Loaded quote tool", quote_completed: "Completed WindowCAD quote", form_submitted: "Sent form", phone_click: "Tapped phone number", email_click: "Tapped email" })[event] || event;
+}
+
+function renderWebsiteJourney() {
+  const journey = websiteVisitorJourney;
+  const events = journey.events || [];
+  return `<div class="website-note website-journey-detail"><div class="panel-header compact"><div><strong>Visitor journey: <code>${escapeHtml(journey.visitor.visitor_id)}</code></strong><p class="panel-subtitle">${escapeHtml(String(journey.journeys?.length || 0))} tracked journey${journey.journeys?.length === 1 ? "" : "s"}; personal details are not stored here.</p></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close</button></div>${events.length ? `<div class="table-wrap"><table class="table website-events-table"><thead><tr><th>When</th><th>What happened</th><th>Page</th><th>Detail</th></tr></thead><tbody>${events.map(renderWebsiteJourneyEvent).join("")}</tbody></table></div>` : `<p class="empty">No detailed events yet. Page views and time on page begin collecting from this update onward.</p>`}</div>`;
+}
+
+function renderWebsiteJourneyEvent(event) {
+  const duration = Number(event.page_duration_seconds || 0) ? `${event.page_duration_seconds}s on page` : "";
+  const value = Number(event.price_amount || 0) > 0 ? `£${Number(event.price_amount).toLocaleString("en-GB", { maximumFractionDigits: 2 })}` : "";
+  const detail = [event.cta, event.link_target, event.product_collection, duration, value].filter(Boolean).join(" · ") || "—";
+  return `<tr><td>${escapeHtml(formatDateTime(event.occurred_at))}</td><td><strong>${escapeHtml(websiteEventLabel(event.event_type))}</strong></td><td>${escapeHtml(event.page_path || "—")}</td><td>${escapeHtml(detail)}</td></tr>`;
 }
 
 function renderWebsiteEvent(item) {
@@ -2771,3 +2805,5 @@ window.dashboardFensterHide = fensterHide;
 window.dashboardWebsiteRefresh = loadWebsite;
 window.dashboardToolsTab = setToolsTab;
 window.dashboardWebsiteView = setWebsiteView;
+window.dashboardWebsiteVisitor = openWebsiteVisitor;
+window.dashboardWebsiteCloseVisitor = closeWebsiteVisitor;

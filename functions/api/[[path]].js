@@ -199,6 +199,7 @@ async function fenster(context, route, user) {
   if (request.method === "POST" && route === "bot/process") return json(await processBotQueue(env, user.name));
   if (request.method === "POST" && route === "bot/prompt") return fensterUpdatePromptContext(env, request, user);
   if (request.method === "GET" && route === "website/state") return fensterWebsiteState(env);
+  if (request.method === "POST" && route === "website/outcome") return fensterWebsiteOutcome(env, request);
   const visitorMatch = route.match(/^website\/visitor\/(FGV-[A-Z0-9-]{8,80})$/i);
   if (request.method === "GET" && visitorMatch) return fensterWebsiteVisitor(env, visitorMatch[1]);
 
@@ -701,8 +702,12 @@ const WEBSITE_EVENT_TYPES = new Set([
   "page_view",
   "page_engaged",
   "link_click",
+  "cta_click",
+  "scroll_depth",
   "quote_opened",
   "quote_iframe_loaded",
+  "form_started",
+  "form_validation_error",
   "form_submitted",
   "phone_click",
   "email_click",
@@ -800,7 +805,8 @@ async function websiteEvent({ request, env }) {
     pageDurationSeconds: websiteDuration(body.page_duration_seconds),
     productCollection: websiteText(body.product_collection, 120),
     priceAmount: websiteNumber(body.price_amount),
-    priceCurrency: websiteText(body.price_currency, 8) || "GBP"
+    priceCurrency: websiteText(body.price_currency, 8) || "GBP",
+    eventValue: Math.round(websiteNumber(body.event_value))
   };
 
   if (data.visitorId) {
@@ -833,11 +839,11 @@ async function websiteEvent({ request, env }) {
   ).run();
 
   await env.DB.prepare(`
-    INSERT INTO website_events (id, journey_id, event_type, occurred_at, page_path, cta, link_target, page_duration_seconds, product_collection, price_amount, price_currency)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO website_events (id, journey_id, event_type, occurred_at, page_path, cta, link_target, page_duration_seconds, product_collection, price_amount, price_currency, event_value)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     crypto.randomUUID(), data.journeyId, data.event, data.occurredAt, data.pagePath, data.cta,
-    data.linkTarget, data.pageDurationSeconds, data.productCollection, data.priceAmount, data.priceCurrency
+    data.linkTarget, data.pageDurationSeconds, data.productCollection, data.priceAmount, data.priceCurrency, data.eventValue
   ).run();
 
   return json({ ok: true, journey_id: data.journeyId }, 201, websiteCorsHeaders(origin));
@@ -860,6 +866,22 @@ async function websiteConsent({ request, env }) {
   return json({ ok: true }, 201, websiteCorsHeaders(origin));
 }
 
+async function fensterWebsiteOutcome(env, request) {
+  const body = await request.json().catch(() => ({}));
+  const journeyId = websiteJourneyId(body.journey_id);
+  const status = websiteText(body.status, 24).toLowerCase();
+  if (!journeyId || !["new", "contacted", "appointment", "won", "lost"].includes(status)) {
+    return json({ error: "A valid journey and sales outcome are required" }, 400);
+  }
+  const exists = await env.DB.prepare("SELECT 1 FROM website_events WHERE journey_id = ? AND event_type IN ('quote_completed', 'form_submitted') LIMIT 1").bind(journeyId).first();
+  if (!exists) return json({ error: "That journey has no completed website lead" }, 404);
+  await env.DB.prepare(`
+    INSERT INTO website_lead_outcomes (journey_id, status, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(journey_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at
+  `).bind(journeyId, status, new Date().toISOString()).run();
+  return json({ ok: true, journey_id: journeyId, status });
+}
+
 async function fensterWebsiteVisitor(env, value) {
   const visitorId = websiteVisitorId(value);
   if (!visitorId) return json({ error: "Invalid visitor" }, 400);
@@ -868,7 +890,7 @@ async function fensterWebsiteVisitor(env, value) {
     env.DB.prepare("SELECT * FROM website_visitors WHERE visitor_id = ?").bind(visitorId).first(),
     env.DB.prepare("SELECT journey_id, first_event_at, last_event_at, landing_path, source, medium, campaign FROM website_journeys WHERE visitor_id = ? ORDER BY first_event_at ASC").bind(visitorId).all(),
     env.DB.prepare(`
-      SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.link_target, e.page_duration_seconds, e.product_collection, e.price_amount, e.price_currency, e.journey_id
+      SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.link_target, e.page_duration_seconds, e.product_collection, e.price_amount, e.price_currency, e.event_value, e.journey_id
       FROM website_events e
       INNER JOIN website_journeys j ON j.journey_id = e.journey_id
       WHERE j.visitor_id = ?
@@ -883,15 +905,16 @@ async function fensterWebsiteVisitor(env, value) {
 
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
-  const [events, journeys, uniqueVisitors, recent, visitors, acquisition, consent] = await Promise.all([
+  const [events, journeys, uniqueVisitors, recent, visitors, outcomes, consent, acquisition] = await Promise.all([
     env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ?").bind(since).first(),
     env.DB.prepare(`
       SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.product_collection, e.price_amount, e.price_currency,
-        j.journey_id, j.landing_path, j.source, j.medium, j.campaign
+        j.journey_id, j.landing_path, j.source, j.medium, j.campaign, COALESCE(o.status, 'new') AS outcome_status
       FROM website_events e
       LEFT JOIN website_journeys j ON j.journey_id = e.journey_id
+      LEFT JOIN website_lead_outcomes o ON o.journey_id = e.journey_id
       WHERE e.event_type IN ('form_submitted', 'quote_completed')
       ORDER BY e.occurred_at DESC LIMIT 16
     `).all(),
@@ -909,6 +932,7 @@ async function fensterWebsiteState(env) {
       GROUP BY v.visitor_id
       ORDER BY v.last_seen_at DESC LIMIT 100
     `).bind(since).all()
+    ,env.DB.prepare("SELECT status, COUNT(*) AS count FROM website_lead_outcomes GROUP BY status").all()
     ,env.DB.prepare("SELECT COALESCE(SUM(banner_shown), 0) AS shown, COALESCE(SUM(accepted), 0) AS accepted, COALESCE(SUM(rejected), 0) AS rejected FROM website_consent_daily WHERE day >= ?").bind(since.slice(0, 10)).first()
     ,env.DB.prepare(`
       SELECT
@@ -943,12 +967,17 @@ async function fensterWebsiteState(env) {
     uniqueVisitors: Number(uniqueVisitors?.count || 0),
     quoteJourneys: Number(quoteJourneys?.count || 0),
     forms: totals.form_submitted || 0,
+    formStarts: totals.form_started || 0,
+    formErrors: totals.form_validation_error || 0,
+    ctaClicks: totals.cta_click || 0,
+    scrollDepths: totals.scroll_depth || 0,
     quotes: totals.quote_completed || 0,
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     recent: recent.results || [],
     visitors: visitors.results || [],
     acquisition: acquisition.results || [],
-    consent: { shown: Number(consent?.shown || 0), accepted: Number(consent?.accepted || 0), rejected: Number(consent?.rejected || 0) }
+    consent: { shown: Number(consent?.shown || 0), accepted: Number(consent?.accepted || 0), rejected: Number(consent?.rejected || 0) },
+    outcomes: Object.fromEntries((outcomes.results || []).map((row) => [row.status, Number(row.count || 0)]))
   });
 }
 

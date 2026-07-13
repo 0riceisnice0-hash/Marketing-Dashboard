@@ -1788,8 +1788,10 @@ function renderWebsiteTool() {
       ${fensterMetric(websiteState.uniqueVisitors || 0, `unique visitors / ${websiteState.periodDays || 30} days`)}
       ${fensterMetric(websiteState.journeys || 0, `journeys / ${websiteState.periodDays || 30} days`)}
       ${fensterMetric(websiteState.quoteJourneys || 0, "quote starts")}
+      ${fensterMetric(websiteState.formStarts || 0, "forms started")}
       ${fensterMetric(websiteState.forms || 0, "forms sent")}
       ${fensterMetric(websiteState.quotes || 0, "WindowCAD quotes")}
+      ${fensterMetric(websiteState.outcomes?.won || 0, "won leads")}
       ${fensterMetric(websiteState.calls || 0, "phone or email clicks")}
     </div>
     ${renderWebsiteFunnel()}
@@ -1837,7 +1839,7 @@ function renderWebsiteFunnel() {
   const quoteStarts = Number(websiteState?.quoteJourneys || 0);
   const leads = Number(websiteState?.quotes || 0) + Number(websiteState?.forms || 0);
   const leadRate = visitors ? Math.round((leads / visitors) * 100) : 0;
-  const steps = [["Visitors", visitors, "People who consented"], ["High intent", quoteStarts, "Started a quote"], ["Leads", leads, "Quote or form sent"]];
+  const steps = [["Visitors", visitors, "People who consented"], ["CTA clicks", Number(websiteState?.ctaClicks || 0), "Chose a commercial action"], ["Quote starts", quoteStarts, "Quote tool loaded or opened"], ["Leads", leads, "Quote or form sent"]];
   return `<section class="website-funnel"><div class="website-section-heading"><div><span>Conversion funnel</span><h3>Where people fall away</h3></div><strong>${leadRate}% <small>visitor-to-lead</small></strong></div><div class="website-funnel__steps">${steps.map(([label, value, copy], index) => `<article class="website-funnel__step"><b>${String(index + 1).padStart(2, "0")}</b><strong>${value}</strong><span>${label}</span><small>${copy}</small></article>`).join("")}</div></section>`;
 }
 
@@ -1847,19 +1849,23 @@ function renderWebsiteDecisionPanel() {
   const quotes = Number(websiteState?.quotes || 0);
   const forms = Number(websiteState?.forms || 0);
   const contactClicks = Number(websiteState?.calls || 0);
+  const formStarts = Number(websiteState?.formStarts || 0);
+  const formErrors = Number(websiteState?.formErrors || 0);
   const enquiryRate = visitors ? Math.round(((quotes + forms) / visitors) * 100) : 0;
   const quoteCompletion = quoteStarts ? Math.round((quotes / quoteStarts) * 100) : 0;
   const nextStep = visitors < 20
     ? "This is still early data. Let it run until there are at least 20 consented visitors before using it to judge a channel or page."
     : quoteStarts === 0
       ? "Visitors are arriving but not opening the quote tool. Review the first-screen call to action and the routes sending traffic here."
+      : formStarts > 0 && forms === 0
+        ? "People are beginning the enquiry form but not sending it. Check the form fields and validation warnings before spending more on traffic."
       : quotes === 0 && forms === 0
         ? "Visitors are showing intent but not becoming leads. Check the quote journey, call button and form friction before spending more on traffic."
         : "Compare channels below. Put more budget behind sources that create completed WindowCAD quotes or forms, not just visits.";
   return `
     <div class="website-note website-decision-note">
       <strong>What this helps you decide</strong>
-      <span>${escapeHtml(nextStep)} ${visitors ? `Lead rate: ${enquiryRate}%.` : ""} ${quoteStarts ? `Quote completion: ${quoteCompletion}%.` : ""} ${contactClicks ? `Contact-button taps: ${contactClicks}.` : ""}</span>
+      <span>${escapeHtml(nextStep)} ${visitors ? `Lead rate: ${enquiryRate}%.` : ""} ${quoteStarts ? `Quote completion: ${quoteCompletion}%.` : ""} ${formStarts ? `Form completion: ${Math.round((forms / formStarts) * 100)}%.` : ""} ${formErrors ? `Validation warnings: ${formErrors}.` : ""} ${contactClicks ? `Contact-button taps: ${contactClicks}.` : ""}</span>
       ${renderWebsiteAcquisition()}
     </div>
   `;
@@ -1894,7 +1900,7 @@ function renderWebsiteVisitor(item) {
 }
 
 function websiteEventLabel(event) {
-  return ({ visitor_seen: "Visitor returned", page_view: "Viewed page", page_engaged: "Time on page", link_click: "Clicked link", quote_opened: "Opened quote tool", quote_iframe_loaded: "Loaded quote tool", quote_completed: "Completed WindowCAD quote", form_submitted: "Sent form", phone_click: "Tapped phone number", email_click: "Tapped email" })[event] || event;
+  return ({ visitor_seen: "Visitor returned", page_view: "Viewed page", page_engaged: "Time on page", link_click: "Clicked link", cta_click: "Clicked call to action", scroll_depth: "Reached page depth", quote_opened: "Opened quote tool", quote_iframe_loaded: "Loaded quote tool", quote_completed: "Completed WindowCAD quote", form_started: "Started form", form_validation_error: "Form validation warning", form_submitted: "Sent form", phone_click: "Tapped phone number", email_click: "Tapped email" })[event] || event;
 }
 
 function renderWebsiteJourney() {
@@ -1906,7 +1912,8 @@ function renderWebsiteJourney() {
 function renderWebsiteJourneyEvent(event) {
   const duration = Number(event.page_duration_seconds || 0) ? `${event.page_duration_seconds}s on page` : "";
   const value = Number(event.price_amount || 0) > 0 ? `£${Number(event.price_amount).toLocaleString("en-GB", { maximumFractionDigits: 2 })}` : "";
-  const detail = [event.cta, event.link_target, event.product_collection, duration, value].filter(Boolean).join(" · ") || "—";
+  const eventValue = Number(event.event_value || 0) ? `${event.event_value}%` : "";
+  const detail = [event.cta, event.link_target, event.product_collection, duration, value, eventValue].filter(Boolean).join(" · ") || "—";
   return `<article class="website-timeline__event website-timeline__event--${escapeHtml(event.event_type)}"><time>${escapeHtml(formatDateTime(event.occurred_at))}</time><i></i><div><strong>${escapeHtml(websiteEventLabel(event.event_type))}</strong><code>${escapeHtml(event.page_path || "—")}</code><span>${escapeHtml(detail)}</span></div></article>`;
 }
 
@@ -1917,12 +1924,22 @@ function renderWebsiteEvent(item) {
   return `
     <tr>
       <td>${escapeHtml(formatDateTime(item.occurred_at))}</td>
-      <td><strong>${escapeHtml(item.event_type === "quote_completed" ? "WindowCAD quote" : "Website form")}</strong></td>
+      <td><strong>${escapeHtml(item.event_type === "quote_completed" ? "WindowCAD quote" : "Website form")}</strong><br><select class="website-outcome-select" aria-label="Lead status" onchange="window.dashboardWebsiteOutcome('${escapeHtml(item.journey_id)}', this.value)">${["new", "contacted", "appointment", "won", "lost"].map((status) => `<option value="${status}" ${status === (item.outcome_status || "new") ? "selected" : ""}>${status[0].toUpperCase() + status.slice(1)}</option>`).join("")}</select></td>
       <td>${escapeHtml(source)}</td>
       <td>${escapeHtml(item.landing_path || item.page_path || "—")}</td>
       <td>${escapeHtml([product, value].filter(Boolean).join(" · "))}</td>
     </tr>
   `;
+}
+
+async function setWebsiteOutcome(journeyId, status) {
+  try {
+    await api("/api/fenster/website/outcome", { method: "POST", body: { journey_id: journeyId, status } });
+    await loadWebsite(true);
+  } catch (error) {
+    const statusNode = $("#website-status");
+    if (statusNode) statusNode.textContent = error.message;
+  }
 }
 
 async function loadFenster(force = false) {
@@ -2838,3 +2855,4 @@ window.dashboardToolsTab = setToolsTab;
 window.dashboardWebsiteView = setWebsiteView;
 window.dashboardWebsiteVisitor = openWebsiteVisitor;
 window.dashboardWebsiteCloseVisitor = closeWebsiteVisitor;
+window.dashboardWebsiteOutcome = setWebsiteOutcome;

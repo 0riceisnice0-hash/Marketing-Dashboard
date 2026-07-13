@@ -220,7 +220,7 @@ Only run remote migrations when a code change actually needs schema changes.
 ## Website / WindowCAD Attribution
 
 The Fenster theme creates an opaque `FG2-…` reference for a quote journey and
-appends it to every WindowCAD URL using the configured `reference` parameter.
+appends it to every WindowCAD URL using the configured `tracking` parameter.
 WindowCAD must have its hidden **Reference** customer field enabled and mapped
 from that URL parameter. When WindowCAD posts to WordPress, WordPress relays a
 non-PII `quote_completed` event to this dashboard and D1 joins it to the first
@@ -229,7 +229,7 @@ website event with the same reference.
 Required configuration (never commit either secret):
 
 - Optional hardening: Cloudflare Pages `WEBSITE_INGEST_SECRET` and matching WordPress/Bedrock `FENSTER_WEBSITE_DASHBOARD_SECRET`. The first release also accepts a server relay which declares a trusted Fenster host, by the owner's explicit phase-one decision; replace that fallback with strict HMAC validation before treating the endpoint as hostile-facing.
-- Optional WordPress overrides: `FENSTER_WEBSITE_DASHBOARD_URL` and `FENSTER_WINDOWCAD_REFERENCE_PARAMETER` (default: `reference`)
+- Optional WordPress overrides: `FENSTER_WEBSITE_DASHBOARD_URL` and `FENSTER_WINDOWCAD_REFERENCE_PARAMETER` (default: `tracking`)
 
 The browser endpoint accepts only `fensterglazing.com`, `www.fensterglazing.com`
 and `test.fensterglazing.com` origins. Browser events only run after the site

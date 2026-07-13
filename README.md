@@ -220,12 +220,25 @@ Only run remote migrations when a code change actually needs schema changes.
 ## Website / WindowCAD Attribution
 
 The Fenster theme creates an opaque `FG2-…` reference for a quote journey and
-appends it to every WindowCAD URL using the configured `tracking` parameter.
+appends it to WindowCAD URLs only after optional-cookie acceptance, using the configured `tracking` parameter.
 WindowCAD must map that URL parameter into its separate **Tracking** customer
 field. The office-owned **Reference** field is intentionally not used. When
 WindowCAD posts to WordPress, WordPress relays a
 non-PII `quote_completed` event to this dashboard and D1 joins it to the first
-website event with the same reference.
+website event with the same reference. The relay must run only for a valid `FG2-…` Tracking value.
+
+The theme also creates opaque `FGV-…` visitor values after acceptance. `FG2-…`
+and `FGV-…` persist for 90 days in the same consenting browser. The tracker
+stores first touch, page views, time on page, meaningful link/CTA clicks,
+quote/form/contact intent and completed WindowCAD quotes. The Website Tracker
+UI provides an acquisition funnel, consent health, an anonymous customer list
+and a clickable chronological journey timeline.
+
+If optional cookies are rejected, WindowCAD receives `rejected-cookies`; before
+a choice it receives `cookie-consent-not-accepted`. Those values still reach
+the office/CRM but must never create or join a dashboard journey. Consent health
+uses daily aggregate-only `banner shown`, `accepted` and `rejected` counters,
+with no visitor ID, URL, referrer, device or personal data.
 
 Required configuration (never commit either secret):
 
@@ -236,6 +249,10 @@ The browser endpoint accepts only `fensterglazing.com`, `www.fensterglazing.com`
 and `test.fensterglazing.com` origins. Browser events only run after the site
 cookie choice is accepted. Names, emails, phones, addresses and raw WindowCAD
 fields remain in WordPress/AdminBase and are never sent to this dashboard.
+
+Focus Group phone integration is intentionally pending API, webhook or scheduled
+call-detail export access. Website `phone_click` means dial intent only; it is
+not an answered or confirmed call.
 
 ## Common Gotchas
 

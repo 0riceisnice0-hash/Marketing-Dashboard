@@ -246,6 +246,7 @@ let state = {};
 let fensterState = null;
 let websiteState = null;
 let fensterTab = "awaiting";
+let toolsTab = "meta";
 let selectedFensterConversationId = null;
 let current = "dashboard";
 let selectedProjectKey = "";
@@ -1332,8 +1333,7 @@ function renderProjectDetail(key) {
       </div>
       ${renderToolsPanel()}
     `;
-    loadFenster(true);
-    loadWebsite(true);
+    loadCurrentTool(true);
     return;
   }
   const items = projectItems(key);
@@ -1670,11 +1670,20 @@ function renderWebsite() {
 
 function renderTools() {
   view.innerHTML = renderToolsPanel();
-  loadFenster(true);
-  loadWebsite(true);
+  loadCurrentTool(true);
 }
 
 function renderToolsPanel() {
+  return `
+    <div class="fenster-tabs tools-tabs" aria-label="Tools">
+      <button class="${toolsTab === "meta" ? "active" : ""}" onclick="window.dashboardToolsTab('meta')">Fenster Meta Tool</button>
+      <button class="${toolsTab === "website" ? "active" : ""}" onclick="window.dashboardToolsTab('website')">Website Tracker</button>
+    </div>
+    ${toolsTab === "website" ? renderWebsiteToolPanel() : renderMetaToolPanel()}
+  `;
+}
+
+function renderMetaToolPanel() {
   return `
     <section class="panel fenster-tool">
       <div class="panel-header">
@@ -1691,6 +1700,11 @@ function renderToolsPanel() {
       <p id="fenster-status" class="result-note">Loading Fenster Meta Bot...</p>
       <div id="fenster-app" class="fenster-app"></div>
     </section>
+  `;
+}
+
+function renderWebsiteToolPanel() {
+  return `
     <section class="panel fenster-tool website-tool">
       <div class="panel-header">
         <div>
@@ -1705,6 +1719,17 @@ function renderToolsPanel() {
       <div id="website-app" class="website-app"></div>
     </section>
   `;
+}
+
+function setToolsTab(tab) {
+  if (!["meta", "website"].includes(tab)) return;
+  toolsTab = tab;
+  render();
+}
+
+async function loadCurrentTool(force = false) {
+  if (toolsTab === "website") return loadWebsite(force);
+  return loadFenster(force);
 }
 
 async function loadWebsite(force = false) {
@@ -2678,3 +2703,4 @@ window.dashboardFensterEmailOffice = fensterEmailOffice;
 window.dashboardFensterReject = fensterReject;
 window.dashboardFensterHide = fensterHide;
 window.dashboardWebsiteRefresh = loadWebsite;
+window.dashboardToolsTab = setToolsTab;

@@ -1227,7 +1227,11 @@ textarea:focus {
 }
 
 .website-tool {
-  margin-top: 1.25rem;
+  margin-top: 0;
+}
+
+.tools-tabs {
+  margin: 0 0 1.25rem;
 }
 
 .website-note {

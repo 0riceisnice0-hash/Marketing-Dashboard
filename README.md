@@ -221,8 +221,9 @@ Only run remote migrations when a code change actually needs schema changes.
 
 The Fenster theme creates an opaque `FG2-…` reference for a quote journey and
 appends it to every WindowCAD URL using the configured `tracking` parameter.
-WindowCAD must have its hidden **Reference** customer field enabled and mapped
-from that URL parameter. When WindowCAD posts to WordPress, WordPress relays a
+WindowCAD must map that URL parameter into its separate **Tracking** customer
+field. The office-owned **Reference** field is intentionally not used. When
+WindowCAD posts to WordPress, WordPress relays a
 non-PII `quote_completed` event to this dashboard and D1 joins it to the first
 website event with the same reference.
 

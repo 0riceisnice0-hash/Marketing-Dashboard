@@ -230,12 +230,15 @@ website event with the same reference. The relay must run only for a valid `FG2-
 
 The theme also creates opaque `FGV-…` visitor values after acceptance. `FG2-…`
 and `FGV-…` persist for 90 days in the same consenting browser. The tracker
-stores first touch, page views, time on page, scroll milestones, meaningful
-link/CTA clicks, quote/form/contact intent, form starts and the first validation
-warning (field name only), plus completed WindowCAD quotes. The Website Tracker
-UI provides an acquisition funnel, consent health, an anonymous customer list,
-a clickable chronological journey timeline and a manual non-PII lead status
-(`new`, `contacted`, `appointment`, `won` or `lost`) for completed leads.
+stores first touch, page views, time on page, 25/50/75/90% scroll milestones,
+meaningful link/CTA clicks, quote/form/contact intent, form starts and the first
+validation warning (field name only), plus completed WindowCAD quotes. The
+Website Tracker UI provides an acquisition funnel, consent health, an anonymous
+customer list, a clickable chronological journey timeline and a manual non-PII
+lead status (`new`, `contacted`, `appointment`, `won` or `lost`) for a completed
+`FG2-...` lead. This is an attribution status, not a CRM record: one journey can
+legitimately produce more than one WindowCAD submission until a unique WindowCAD
+project ID is included in the callback.
 
 If optional cookies are rejected, WindowCAD receives `rejected-cookies`; before
 a choice it receives `cookie-consent-not-accepted`. Those values still reach

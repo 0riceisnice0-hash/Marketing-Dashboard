@@ -1226,6 +1226,39 @@ textarea:focus {
   padding: 18px;
 }
 
+.website-tool {
+  margin-top: 1.25rem;
+}
+
+.website-note {
+  display: grid;
+  gap: .3rem;
+  margin: 1rem 0;
+  padding: .9rem 1rem;
+  border: 1px solid rgba(30, 111, 146, .18);
+  border-radius: 12px;
+  background: #f1f8fb;
+  color: #36535d;
+  font-size: .92rem;
+}
+
+.website-note strong {
+  color: #174b62;
+}
+
+.website-note code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: .85em;
+}
+
+.website-recent {
+  margin-top: 1.25rem;
+}
+
+.website-events-table td {
+  vertical-align: top;
+}
+
 .tool-actions {
   margin-top: 0;
 }

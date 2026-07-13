@@ -244,6 +244,7 @@ const config = {
 
 let state = {};
 let fensterState = null;
+let websiteState = null;
 let fensterTab = "awaiting";
 let selectedFensterConversationId = null;
 let current = "dashboard";
@@ -344,6 +345,7 @@ async function refreshDashboard() {
     if (current === "projects" && selectedProjectKey === "tools") {
       await api("/api/fenster/meta/sync", { method: "POST", body: {} });
       await loadFenster(true);
+      await loadWebsite(true);
     }
     else render();
   } catch (error) {
@@ -1331,6 +1333,7 @@ function renderProjectDetail(key) {
       ${renderToolsPanel()}
     `;
     loadFenster(true);
+    loadWebsite(true);
     return;
   }
   const items = projectItems(key);
@@ -1668,6 +1671,7 @@ function renderWebsite() {
 function renderTools() {
   view.innerHTML = renderToolsPanel();
   loadFenster(true);
+  loadWebsite(true);
 }
 
 function renderToolsPanel() {
@@ -1687,6 +1691,81 @@ function renderToolsPanel() {
       <p id="fenster-status" class="result-note">Loading Fenster Meta Bot...</p>
       <div id="fenster-app" class="fenster-app"></div>
     </section>
+    <section class="panel fenster-tool website-tool">
+      <div class="panel-header">
+        <div>
+          <h3>Website</h3>
+          <p class="panel-subtitle">One place for consented website journeys, WindowCAD quote outcomes, forms and contact intent. Customer details stay in WordPress and AdminBase.</p>
+        </div>
+        <div class="actions tool-actions">
+          <button onclick="window.dashboardWebsiteRefresh()">Refresh</button>
+        </div>
+      </div>
+      <p id="website-status" class="result-note">Loading website reporting...</p>
+      <div id="website-app" class="website-app"></div>
+    </section>
+  `;
+}
+
+async function loadWebsite(force = false) {
+  const mount = $("#website-app");
+  const status = $("#website-status");
+  if (!mount || (!force && current !== "tools" && selectedProjectKey !== "tools")) return;
+  try {
+    websiteState = await api("/api/fenster/website/state");
+    status.textContent = "";
+    renderWebsiteTool();
+  } catch (error) {
+    status.textContent = error.message;
+    mount.innerHTML = "";
+  }
+}
+
+function renderWebsiteTool() {
+  const mount = $("#website-app");
+  if (!mount || !websiteState) return;
+  const recent = websiteState.recent || [];
+  mount.innerHTML = `
+    <div class="fenster-metrics">
+      ${fensterMetric(websiteState.journeys || 0, `journeys / ${websiteState.periodDays || 30} days`)}
+      ${fensterMetric(websiteState.quoteJourneys || 0, "quote starts")}
+      ${fensterMetric(websiteState.forms || 0, "forms sent")}
+      ${fensterMetric(websiteState.quotes || 0, "WindowCAD quotes")}
+      ${fensterMetric(websiteState.calls || 0, "phone or email clicks")}
+    </div>
+    <div class="website-note">
+      <strong>How the join works</strong>
+      <span>An opaque <code>FG2-…</code> reference follows every WindowCAD launch. When WindowCAD calls WordPress, the server records the quote outcome against that journey without sending customer PII here.</span>
+    </div>
+    <div class="website-recent">
+      <div class="panel-header compact">
+        <div>
+          <h3>Recent lead outcomes</h3>
+          <p class="panel-subtitle">The source, campaign and landing page are captured from the first website event.</p>
+        </div>
+      </div>
+      ${recent.length ? `
+        <div class="table-wrap"><table class="table website-events-table">
+          <thead><tr><th>When</th><th>Outcome</th><th>Source</th><th>Landing page</th><th>Product / value</th></tr></thead>
+          <tbody>${recent.map(renderWebsiteEvent).join("")}</tbody>
+        </table></div>
+      ` : `<p class="empty">No website outcomes yet. The test journey will appear here once the WindowCAD Reference field has returned through the callback.</p>`}
+    </div>
+  `;
+}
+
+function renderWebsiteEvent(item) {
+  const source = [item.source, item.medium, item.campaign].filter(Boolean).join(" / ") || "Direct or unknown";
+  const product = item.product_collection || "—";
+  const value = Number(item.price_amount || 0) > 0 ? `£${Number(item.price_amount).toLocaleString("en-GB", { maximumFractionDigits: 2 })}` : "";
+  return `
+    <tr>
+      <td>${escapeHtml(formatDateTime(item.occurred_at))}</td>
+      <td><strong>${escapeHtml(item.event_type === "quote_completed" ? "WindowCAD quote" : "Website form")}</strong></td>
+      <td>${escapeHtml(source)}</td>
+      <td>${escapeHtml(item.landing_path || item.page_path || "—")}</td>
+      <td>${escapeHtml([product, value].filter(Boolean).join(" · "))}</td>
+    </tr>
   `;
 }
 
@@ -2598,3 +2677,4 @@ window.dashboardFensterSend = fensterSend;
 window.dashboardFensterEmailOffice = fensterEmailOffice;
 window.dashboardFensterReject = fensterReject;
 window.dashboardFensterHide = fensterHide;
+window.dashboardWebsiteRefresh = loadWebsite;

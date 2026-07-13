@@ -21,6 +21,8 @@ export async function onRequest(context) {
   const route = url.pathname.replace(/^\/api\/?/, "");
 
   try {
+    if (route === "website/event" && context.request.method === "OPTIONS") return websiteCors(context.request);
+    if (route === "website/event" && context.request.method === "POST") return websiteEvent(context);
     if (route === "login" && context.request.method === "POST") return login(context);
     if (route === "logout") return logout(context);
 
@@ -194,6 +196,7 @@ async function fenster(context, route, user) {
   if (request.method === "POST" && route === "bot/stop") return fensterSetBotActive(env, false, user);
   if (request.method === "POST" && route === "bot/process") return json(await processBotQueue(env, user.name));
   if (request.method === "POST" && route === "bot/prompt") return fensterUpdatePromptContext(env, request, user);
+  if (request.method === "GET" && route === "website/state") return fensterWebsiteState(env);
 
   const draftMatch = route.match(/^conversations\/([^/]+)\/(draft|generate-draft|send|hide|reject|email-office)$/);
   if (draftMatch && request.method === "POST") {
@@ -687,6 +690,142 @@ function normaliseDecision(raw) {
 
 function flagHuman(reason) {
   return { action: "FLAG_HUMAN", reply: "", internal_note: reason };
+}
+
+const WEBSITE_EVENT_TYPES = new Set([
+  "quote_opened",
+  "quote_iframe_loaded",
+  "form_submitted",
+  "phone_click",
+  "email_click",
+  "quote_completed"
+]);
+
+function websiteCors(request) {
+  const origin = request.headers.get("Origin") || "";
+  return new Response(null, { status: 204, headers: websiteCorsHeaders(origin) });
+}
+
+function websiteCorsHeaders(origin) {
+  return isFensterWebsiteOrigin(origin)
+    ? {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Vary": "Origin"
+      }
+    : {};
+}
+
+function isFensterWebsiteOrigin(origin) {
+  try {
+    return ["fensterglazing.com", "www.fensterglazing.com", "test.fensterglazing.com"].includes(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function websiteText(value, limit = 180) {
+  return String(value || "").trim().slice(0, limit);
+}
+
+function websiteJourneyId(value, fallback = "") {
+  const id = websiteText(value, 96).toUpperCase();
+  return /^FG2-[A-Z0-9-]{8,80}$/.test(id) ? id : fallback;
+}
+
+function websiteNumber(value) {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 && amount < 1000000 ? amount : 0;
+}
+
+async function websiteEvent({ request, env }) {
+  const origin = request.headers.get("Origin") || "";
+  const signed = Boolean(env.WEBSITE_INGEST_SECRET) && request.headers.get("X-Fenster-Website-Secret") === env.WEBSITE_INGEST_SECRET;
+  if (!signed && !isFensterWebsiteOrigin(origin)) return json({ error: "Untrusted website event" }, 403);
+
+  const body = await request.json().catch(() => ({}));
+  const event = websiteText(body.event, 64);
+  if (!WEBSITE_EVENT_TYPES.has(event)) return json({ error: "Unsupported website event" }, 400, websiteCorsHeaders(origin));
+
+  const journeyId = websiteJourneyId(body.journey_id, event === "quote_completed" ? `UNATTRIBUTED-${crypto.randomUUID()}` : "");
+  if (!journeyId) return json({ error: "A valid journey reference is required" }, 400, websiteCorsHeaders(origin));
+
+  const data = {
+    journeyId,
+    event,
+    occurredAt: new Date().toISOString(),
+    pagePath: websiteText(body.page_path, 500),
+    landingPath: websiteText(body.landing_path, 500),
+    source: websiteText(body.source, 120),
+    medium: websiteText(body.medium, 120),
+    campaign: websiteText(body.campaign, 180),
+    content: websiteText(body.content, 180),
+    term: websiteText(body.term, 180),
+    referrerHost: websiteText(body.referrer_host, 180),
+    cta: websiteText(body.cta, 180),
+    productCollection: websiteText(body.product_collection, 120),
+    priceAmount: websiteNumber(body.price_amount),
+    priceCurrency: websiteText(body.price_currency, 8) || "GBP"
+  };
+
+  await env.DB.prepare(`
+    INSERT INTO website_journeys (journey_id, first_event_at, last_event_at, landing_path, source, medium, campaign, content, term, referrer_host)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(journey_id) DO UPDATE SET
+      last_event_at = excluded.last_event_at,
+      landing_path = CASE WHEN website_journeys.landing_path = '' THEN excluded.landing_path ELSE website_journeys.landing_path END,
+      source = CASE WHEN website_journeys.source = '' THEN excluded.source ELSE website_journeys.source END,
+      medium = CASE WHEN website_journeys.medium = '' THEN excluded.medium ELSE website_journeys.medium END,
+      campaign = CASE WHEN website_journeys.campaign = '' THEN excluded.campaign ELSE website_journeys.campaign END,
+      content = CASE WHEN website_journeys.content = '' THEN excluded.content ELSE website_journeys.content END,
+      term = CASE WHEN website_journeys.term = '' THEN excluded.term ELSE website_journeys.term END,
+      referrer_host = CASE WHEN website_journeys.referrer_host = '' THEN excluded.referrer_host ELSE website_journeys.referrer_host END
+  `).bind(
+    data.journeyId, data.occurredAt, data.occurredAt, data.landingPath, data.source, data.medium,
+    data.campaign, data.content, data.term, data.referrerHost
+  ).run();
+
+  await env.DB.prepare(`
+    INSERT INTO website_events (id, journey_id, event_type, occurred_at, page_path, cta, product_collection, price_amount, price_currency)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    crypto.randomUUID(), data.journeyId, data.event, data.occurredAt, data.pagePath, data.cta,
+    data.productCollection, data.priceAmount, data.priceCurrency
+  ).run();
+
+  return json({ ok: true, journey_id: data.journeyId }, 201, websiteCorsHeaders(origin));
+}
+
+async function fensterWebsiteState(env) {
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  const [events, journeys, recent] = await Promise.all([
+    env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
+    env.DB.prepare(`
+      SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.product_collection, e.price_amount, e.price_currency,
+        j.journey_id, j.landing_path, j.source, j.medium, j.campaign
+      FROM website_events e
+      LEFT JOIN website_journeys j ON j.journey_id = e.journey_id
+      WHERE e.event_type IN ('form_submitted', 'quote_completed')
+      ORDER BY e.occurred_at DESC LIMIT 16
+    `).all()
+  ]);
+  const totals = Object.fromEntries((events.results || []).map((row) => [row.event_type, Number(row.count || 0)]));
+  const quoteJourneys = await env.DB.prepare(`
+    SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
+    WHERE occurred_at >= ? AND event_type IN ('quote_opened', 'quote_iframe_loaded')
+  `).bind(since).first();
+
+  return json({
+    periodDays: 30,
+    journeys: Number(journeys?.count || 0),
+    quoteJourneys: Number(quoteJourneys?.count || 0),
+    forms: totals.form_submitted || 0,
+    quotes: totals.quote_completed || 0,
+    calls: (totals.phone_click || 0) + (totals.email_click || 0),
+    recent: recent.results || []
+  });
 }
 
 function humanHandoffDecision(conversation) {

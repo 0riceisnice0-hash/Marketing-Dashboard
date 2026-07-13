@@ -37,6 +37,7 @@ If the live file still contains old code, Cloudflare has not deployed the new ve
 - Roadmap tasks.
 - Website work board.
 - Tools tab for the Fenster Meta/social inbox bot.
+- Tools tab Website section for consented website journeys, WindowCAD quote outcomes, forms and contact intent.
 - Notes attached to records through the shared `notes` table.
 
 ## Project Structure
@@ -119,6 +120,8 @@ Fenster bot tables:
 - `fenster_events`
 - `fenster_settings`
 - `fenster_bot_queue`
+- `website_journeys` (opaque `FG2-…` journey references and first-touch attribution)
+- `website_events` (quote starts, forms, contact clicks and completed WindowCAD quotes; no customer PII)
 
 ## Login And Secrets
 
@@ -213,6 +216,26 @@ npm run db:migrate:remote
 ```
 
 Only run remote migrations when a code change actually needs schema changes.
+
+## Website / WindowCAD Attribution
+
+The Fenster theme creates an opaque `FG2-…` reference for a quote journey and
+appends it to every WindowCAD URL using the configured `reference` parameter.
+WindowCAD must have its hidden **Reference** customer field enabled and mapped
+from that URL parameter. When WindowCAD posts to WordPress, WordPress relays a
+non-PII `quote_completed` event to this dashboard and D1 joins it to the first
+website event with the same reference.
+
+Required configuration (never commit either secret):
+
+- Cloudflare Pages secret: `WEBSITE_INGEST_SECRET`
+- Fenster WordPress/Bedrock environment: `FENSTER_WEBSITE_DASHBOARD_SECRET` with the same value
+- Optional WordPress overrides: `FENSTER_WEBSITE_DASHBOARD_URL` and `FENSTER_WINDOWCAD_REFERENCE_PARAMETER` (default: `reference`)
+
+The browser endpoint accepts only `fensterglazing.com`, `www.fensterglazing.com`
+and `test.fensterglazing.com` origins. Browser events only run after the site
+cookie choice is accepted. Names, emails, phones, addresses and raw WindowCAD
+fields remain in WordPress/AdminBase and are never sent to this dashboard.
 
 ## Common Gotchas
 

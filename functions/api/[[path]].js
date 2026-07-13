@@ -741,10 +741,17 @@ function websiteNumber(value) {
 
 async function websiteEvent({ request, env }) {
   const origin = request.headers.get("Origin") || "";
-  const signed = Boolean(env.WEBSITE_INGEST_SECRET) && request.headers.get("X-Fenster-Website-Secret") === env.WEBSITE_INGEST_SECRET;
-  if (!signed && !isFensterWebsiteOrigin(origin)) return json({ error: "Untrusted website event" }, 403);
-
   const body = await request.json().catch(() => ({}));
+  const signed = Boolean(env.WEBSITE_INGEST_SECRET) && request.headers.get("X-Fenster-Website-Secret") === env.WEBSITE_INGEST_SECRET;
+  // The WordPress callback is server-to-server, so it has no browser Origin.
+  // Phase one deliberately also accepts its declared Fenster host; this is
+  // non-PII telemetry only and the owner has accepted this trade-off. Retain
+  // the secret path so HMAC/strict server validation can be enabled later.
+  const serverOrigin = websiteText(body.origin, 300);
+  if (!signed && !isFensterWebsiteOrigin(origin) && !isFensterWebsiteOrigin(serverOrigin)) {
+    return json({ error: "Untrusted website event" }, 403);
+  }
+
   const event = websiteText(body.event, 64);
   if (!WEBSITE_EVENT_TYPES.has(event)) return json({ error: "Unsupported website event" }, 400, websiteCorsHeaders(origin));
 

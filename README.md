@@ -228,8 +228,7 @@ website event with the same reference.
 
 Required configuration (never commit either secret):
 
-- Cloudflare Pages secret: `WEBSITE_INGEST_SECRET`
-- Fenster WordPress/Bedrock environment: `FENSTER_WEBSITE_DASHBOARD_SECRET` with the same value
+- Optional hardening: Cloudflare Pages `WEBSITE_INGEST_SECRET` and matching WordPress/Bedrock `FENSTER_WEBSITE_DASHBOARD_SECRET`. The first release also accepts a server relay which declares a trusted Fenster host, by the owner's explicit phase-one decision; replace that fallback with strict HMAC validation before treating the endpoint as hostile-facing.
 - Optional WordPress overrides: `FENSTER_WEBSITE_DASHBOARD_URL` and `FENSTER_WINDOWCAD_REFERENCE_PARAMETER` (default: `reference`)
 
 The browser endpoint accepts only `fensterglazing.com`, `www.fensterglazing.com`

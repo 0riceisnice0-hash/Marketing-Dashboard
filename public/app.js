@@ -1774,7 +1774,16 @@ function renderWebsiteTool() {
   if (!mount || !websiteState) return;
   const recent = websiteState.recent || [];
   mount.innerHTML = `
-    <div class="fenster-metrics">
+    <div class="website-dashboard">
+    <section class="website-hero-card">
+      <div>
+        <span class="website-kicker"><i></i> Consent-led tracking</span>
+        <h3>Website growth, without the guesswork.</h3>
+        <p>Follow anonymous visitors from first touch to quote, form or call intent — then see exactly what they did on the way.</p>
+      </div>
+      <div class="website-hero-card__status"><strong>Last ${websiteState.periodDays || 30} days</strong><span>Live WindowCAD join</span></div>
+    </section>
+    <div class="fenster-metrics website-metrics">
       ${fensterMetric(websiteState.uniqueVisitors || 0, `unique visitors / ${websiteState.periodDays || 30} days`)}
       ${fensterMetric(websiteState.journeys || 0, `journeys / ${websiteState.periodDays || 30} days`)}
       ${fensterMetric(websiteState.quoteJourneys || 0, "quote starts")}
@@ -1782,6 +1791,7 @@ function renderWebsiteTool() {
       ${fensterMetric(websiteState.quotes || 0, "WindowCAD quotes")}
       ${fensterMetric(websiteState.calls || 0, "phone or email clicks")}
     </div>
+    ${renderWebsiteFunnel()}
     <div class="website-note">
       <strong>How the join works</strong>
       <span>An opaque <code>FG2-…</code> reference follows every WindowCAD launch. When WindowCAD calls WordPress, the server records the quote outcome against that journey without sending customer PII here.</span>
@@ -1807,7 +1817,17 @@ function renderWebsiteTool() {
       ` : `<p class="empty">No website outcomes yet. The test journey will appear here once the WindowCAD Reference field has returned through the callback.</p>`}
     </div>
     `}
+    </div>
   `;
+}
+
+function renderWebsiteFunnel() {
+  const visitors = Number(websiteState?.uniqueVisitors || 0);
+  const quoteStarts = Number(websiteState?.quoteJourneys || 0);
+  const leads = Number(websiteState?.quotes || 0) + Number(websiteState?.forms || 0);
+  const leadRate = visitors ? Math.round((leads / visitors) * 100) : 0;
+  const steps = [["Visitors", visitors, "People who consented"], ["High intent", quoteStarts, "Started a quote"], ["Leads", leads, "Quote or form sent"]];
+  return `<section class="website-funnel"><div class="website-section-heading"><div><span>Conversion funnel</span><h3>Where people fall away</h3></div><strong>${leadRate}% <small>visitor-to-lead</small></strong></div><div class="website-funnel__steps">${steps.map(([label, value, copy], index) => `<article class="website-funnel__step"><b>${String(index + 1).padStart(2, "0")}</b><strong>${value}</strong><span>${label}</span><small>${copy}</small></article>`).join("")}</div></section>`;
 }
 
 function renderWebsiteDecisionPanel() {
@@ -1859,7 +1879,7 @@ function renderWebsiteVisitor(item) {
     Number(item.forms || 0) ? `${item.forms} forms` : "",
     Number(item.contact_clicks || 0) ? `${item.contact_clicks} contact clicks` : ""
   ].filter(Boolean).join(" · ") || "Browsing";
-  return `<tr><td><button class="link-button" onclick="window.dashboardWebsiteVisitor('${escapeHtml(item.visitor_id)}')"><code>${escapeHtml(item.visitor_id)}</code></button></td><td>${escapeHtml(source)}<br><small>${escapeHtml(formatDateTime(item.first_seen_at))}</small></td><td>${escapeHtml(formatDateTime(item.last_seen_at))}</td><td>${escapeHtml(item.first_landing_path || "—")}</td><td>${escapeHtml(String(item.journeys || 0))}</td><td>${escapeHtml(intent)}</td></tr>`;
+  return `<tr class="website-visitor-row" onclick="window.dashboardWebsiteVisitor('${escapeHtml(item.visitor_id)}')"><td><button class="website-visitor-trigger" onclick="event.stopPropagation();window.dashboardWebsiteVisitor('${escapeHtml(item.visitor_id)}')"><i>${escapeHtml(item.visitor_id.slice(-2))}</i><span><code>${escapeHtml(item.visitor_id)}</code><small>Open journey</small></span><b>›</b></button></td><td>${escapeHtml(source)}<br><small>${escapeHtml(formatDateTime(item.first_seen_at))}</small></td><td>${escapeHtml(formatDateTime(item.last_seen_at))}</td><td><code>${escapeHtml(item.first_landing_path || "—")}</code></td><td>${escapeHtml(String(item.journeys || 0))}</td><td><span class="website-intent">${escapeHtml(intent)}</span></td></tr>`;
 }
 
 function websiteEventLabel(event) {
@@ -1869,14 +1889,14 @@ function websiteEventLabel(event) {
 function renderWebsiteJourney() {
   const journey = websiteVisitorJourney;
   const events = journey.events || [];
-  return `<div class="website-note website-journey-detail"><div class="panel-header compact"><div><strong>Visitor journey: <code>${escapeHtml(journey.visitor.visitor_id)}</code></strong><p class="panel-subtitle">${escapeHtml(String(journey.journeys?.length || 0))} tracked journey${journey.journeys?.length === 1 ? "" : "s"}; personal details are not stored here.</p></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close</button></div>${events.length ? `<div class="table-wrap"><table class="table website-events-table"><thead><tr><th>When</th><th>What happened</th><th>Page</th><th>Detail</th></tr></thead><tbody>${events.map(renderWebsiteJourneyEvent).join("")}</tbody></table></div>` : `<p class="empty">No detailed events yet. Page views and time on page begin collecting from this update onward.</p>`}</div>`;
+  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Visitor journey</span><h3><code>${escapeHtml(journey.visitor.visitor_id)}</code></h3><p>${escapeHtml(String(journey.journeys?.length || 0))} tracked journey${journey.journeys?.length === 1 ? "" : "s"} · anonymous and consented</p></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close <b>×</b></button></div>${events.length ? `<div class="website-timeline">${events.map(renderWebsiteJourneyEvent).join("")}</div>` : `<p class="empty">No detailed events yet. Page views and time on page begin collecting from this update onward.</p>`}</section>`;
 }
 
 function renderWebsiteJourneyEvent(event) {
   const duration = Number(event.page_duration_seconds || 0) ? `${event.page_duration_seconds}s on page` : "";
   const value = Number(event.price_amount || 0) > 0 ? `£${Number(event.price_amount).toLocaleString("en-GB", { maximumFractionDigits: 2 })}` : "";
   const detail = [event.cta, event.link_target, event.product_collection, duration, value].filter(Boolean).join(" · ") || "—";
-  return `<tr><td>${escapeHtml(formatDateTime(event.occurred_at))}</td><td><strong>${escapeHtml(websiteEventLabel(event.event_type))}</strong></td><td>${escapeHtml(event.page_path || "—")}</td><td>${escapeHtml(detail)}</td></tr>`;
+  return `<article class="website-timeline__event website-timeline__event--${escapeHtml(event.event_type)}"><time>${escapeHtml(formatDateTime(event.occurred_at))}</time><i></i><div><strong>${escapeHtml(websiteEventLabel(event.event_type))}</strong><code>${escapeHtml(event.page_path || "—")}</code><span>${escapeHtml(detail)}</span></div></article>`;
 }
 
 function renderWebsiteEvent(item) {

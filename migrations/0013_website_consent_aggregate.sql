@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS website_consent_daily (
+  day TEXT PRIMARY KEY,
+  banner_shown INTEGER NOT NULL DEFAULT 0,
+  accepted INTEGER NOT NULL DEFAULT 0,
+  rejected INTEGER NOT NULL DEFAULT 0
+);

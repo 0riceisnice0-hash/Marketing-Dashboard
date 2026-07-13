@@ -1299,6 +1299,16 @@ textarea:focus {
 .website-metrics .metric::before { content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 3px; background: linear-gradient(90deg, var(--green), #42b5d7); }
 .website-metrics .metric strong { color: #153d59; font-size: 1.65rem; }
 
+.website-consent-health { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding: 17px 18px; border: 1px solid #e6d8ac; border-radius: 13px; background: linear-gradient(120deg, #fffdf3, #fff9e5); }
+.website-consent-health > div > span { color: #947018; font-size: .72rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.website-consent-health h3 { margin: 4px 0; color: #584714; font-size: 1rem; }
+.website-consent-health p { margin: 0; color: #786d4c; font-size: .8rem; }
+.website-consent-health__figures { display: grid; grid-template-columns: repeat(4, minmax(75px, 1fr)); gap: 7px; min-width: 390px; }
+.website-consent-health__figures article { display: grid; gap: 3px; padding: 7px 10px; border-left: 1px solid #e6d8ac; }
+.website-consent-health__figures strong { color: #685319; font-size: 1.2rem; }
+.website-consent-health__figures span { color: #84785a; font-size: .68rem; font-weight: 800; }
+.website-consent-health__rate { border-radius: 8px; background: #f3e7b7; }
+
 .website-funnel {
   padding: 18px;
   border: 1px solid #dbe8ee;
@@ -1925,6 +1935,8 @@ dialog::backdrop {
   .website-hero-card { align-items: start; flex-direction: column; }
   .website-hero-card__status { min-width: 0; padding: 12px 0 0; border-top: 1px solid rgba(255,255,255,.18); border-left: 0; }
   .website-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .website-consent-health { align-items: start; flex-direction: column; }
+  .website-consent-health__figures { width: 100%; min-width: 0; }
 }
 
 @media (max-width: 640px) {
@@ -1966,6 +1978,7 @@ dialog::backdrop {
   .website-hero-card { padding: 18px; border-radius: 13px; }
   .website-hero-card h3 { font-size: 1.45rem; }
   .website-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .website-consent-health__figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .website-funnel { padding: 14px; }
   .website-section-heading { align-items: start; flex-direction: column; }
   .website-funnel__steps { grid-template-columns: 1fr; }

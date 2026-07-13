@@ -23,6 +23,8 @@ export async function onRequest(context) {
   try {
     if (route === "website/event" && context.request.method === "OPTIONS") return websiteCors(context.request);
     if (route === "website/event" && context.request.method === "POST") return websiteEvent(context);
+    if (route === "website/consent" && context.request.method === "OPTIONS") return websiteCors(context.request);
+    if (route === "website/consent" && context.request.method === "POST") return websiteConsent(context);
     if (route === "login" && context.request.method === "POST") return login(context);
     if (route === "logout") return logout(context);
 
@@ -841,6 +843,23 @@ async function websiteEvent({ request, env }) {
   return json({ ok: true, journey_id: data.journeyId }, 201, websiteCorsHeaders(origin));
 }
 
+async function websiteConsent({ request, env }) {
+  const origin = request.headers.get("Origin") || "";
+  if (!isFensterWebsiteOrigin(origin)) return json({ error: "Untrusted consent event" }, 403);
+  const body = await request.json().catch(() => ({}));
+  const choice = websiteText(body.choice, 24);
+  const column = { shown: "banner_shown", accepted: "accepted", rejected: "rejected" }[choice];
+  if (!column) return json({ error: "Unsupported consent choice" }, 400, websiteCorsHeaders(origin));
+
+  const day = new Date().toISOString().slice(0, 10);
+  await env.DB.prepare(`
+    INSERT INTO website_consent_daily (day, ${column}) VALUES (?, 1)
+    ON CONFLICT(day) DO UPDATE SET ${column} = ${column} + 1
+  `).bind(day).run();
+
+  return json({ ok: true }, 201, websiteCorsHeaders(origin));
+}
+
 async function fensterWebsiteVisitor(env, value) {
   const visitorId = websiteVisitorId(value);
   if (!visitorId) return json({ error: "Invalid visitor" }, 400);
@@ -864,7 +883,7 @@ async function fensterWebsiteVisitor(env, value) {
 
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
-  const [events, journeys, uniqueVisitors, recent, visitors, acquisition] = await Promise.all([
+  const [events, journeys, uniqueVisitors, recent, visitors, acquisition, consent] = await Promise.all([
     env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ?").bind(since).first(),
@@ -890,6 +909,7 @@ async function fensterWebsiteState(env) {
       GROUP BY v.visitor_id
       ORDER BY v.last_seen_at DESC LIMIT 100
     `).bind(since).all()
+    ,env.DB.prepare("SELECT COALESCE(SUM(banner_shown), 0) AS shown, COALESCE(SUM(accepted), 0) AS accepted, COALESCE(SUM(rejected), 0) AS rejected FROM website_consent_daily WHERE day >= ?").bind(since.slice(0, 10)).first()
     ,env.DB.prepare(`
       SELECT
         CASE
@@ -927,7 +947,8 @@ async function fensterWebsiteState(env) {
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     recent: recent.results || [],
     visitors: visitors.results || [],
-    acquisition: acquisition.results || []
+    acquisition: acquisition.results || [],
+    consent: { shown: Number(consent?.shown || 0), accepted: Number(consent?.accepted || 0), rejected: Number(consent?.rejected || 0) }
   });
 }
 

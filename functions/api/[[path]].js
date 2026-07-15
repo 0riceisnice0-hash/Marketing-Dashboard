@@ -23,6 +23,8 @@ export async function onRequest(context) {
   try {
     if (route === "website/event" && context.request.method === "OPTIONS") return websiteCors(context.request);
     if (route === "website/event" && context.request.method === "POST") return websiteEvent(context);
+    if (route === "website/chat" && context.request.method === "OPTIONS") return websiteCors(context.request);
+    if (route === "website/chat" && context.request.method === "POST") return websiteChat(context);
     if (route === "website/consent" && context.request.method === "OPTIONS") return websiteCors(context.request);
     if (route === "website/consent" && context.request.method === "POST") return websiteConsent(context);
     if (route === "login" && context.request.method === "POST") return login(context);
@@ -200,6 +202,8 @@ async function fenster(context, route, user) {
   if (request.method === "POST" && route === "bot/prompt") return fensterUpdatePromptContext(env, request, user);
   if (request.method === "GET" && route === "website/state") return fensterWebsiteState(env);
   if (request.method === "POST" && route === "website/outcome") return fensterWebsiteOutcome(env, request);
+  const chatMatch = route.match(/^website\/chat\/(CHT-[A-Z0-9-]{8,80})$/i);
+  if (request.method === "GET" && chatMatch) return fensterWebsiteChat(env, chatMatch[1]);
   const visitorMatch = route.match(/^website\/visitor\/(FGV-[A-Z0-9-]{8,80})$/i);
   if (request.method === "GET" && visitorMatch) return fensterWebsiteVisitor(env, visitorMatch[1]);
 
@@ -711,6 +715,10 @@ const WEBSITE_EVENT_TYPES = new Set([
   "form_submitted",
   "phone_click",
   "email_click",
+  "chat_opened",
+  "chat_acknowledged",
+  "chat_message_sent",
+  "chat_reply_received",
   "quote_completed"
 ]);
 
@@ -866,6 +874,34 @@ async function websiteConsent({ request, env }) {
   return json({ ok: true }, 201, websiteCorsHeaders(origin));
 }
 
+function websiteChatId(value) {
+  const id = websiteText(value, 96).toUpperCase();
+  return /^CHT-[A-Z0-9-]{8,80}$/.test(id) ? id : "";
+}
+
+async function websiteChat({ request, env }) {
+  const origin = request.headers.get("Origin") || "";
+  if (!isFensterWebsiteOrigin(origin)) return json({ error: "Untrusted chat transcript" }, 403);
+  const body = await request.json().catch(() => ({}));
+  const conversationId = websiteChatId(body.conversation_id);
+  const journeyId = websiteJourneyId(body.journey_id);
+  const visitorId = websiteVisitorId(body.visitor_id);
+  const role = websiteText(body.role, 16);
+  const messageId = websiteText(body.message_id, 96);
+  const text = websiteText(body.body, 900);
+  if (!conversationId || !journeyId || !visitorId || !messageId || !["user", "assistant"].includes(role) || !text) {
+    return json({ error: "A valid consented chat message is required" }, 400, websiteCorsHeaders(origin));
+  }
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + (30 * 86400000)).toISOString();
+  await env.DB.prepare("DELETE FROM website_chat_messages WHERE expires_at <= ?").bind(now.toISOString()).run();
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO website_chat_messages (id, conversation_id, journey_id, visitor_id, page_path, role, body, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(messageId, conversationId, journeyId, visitorId, websiteText(body.page_path, 500), role, text, now.toISOString(), expiresAt).run();
+  return json({ ok: true, conversation_id: conversationId }, 201, websiteCorsHeaders(origin));
+}
+
 async function fensterWebsiteOutcome(env, request) {
   const body = await request.json().catch(() => ({}));
   const journeyId = websiteJourneyId(body.journey_id);
@@ -886,7 +922,7 @@ async function fensterWebsiteVisitor(env, value) {
   const visitorId = websiteVisitorId(value);
   if (!visitorId) return json({ error: "Invalid visitor" }, 400);
 
-  const [visitor, journeys, events] = await Promise.all([
+  const [visitor, journeys, events, chats] = await Promise.all([
     env.DB.prepare("SELECT * FROM website_visitors WHERE visitor_id = ?").bind(visitorId).first(),
     env.DB.prepare("SELECT journey_id, first_event_at, last_event_at, landing_path, source, medium, campaign FROM website_journeys WHERE visitor_id = ? ORDER BY first_event_at ASC").bind(visitorId).all(),
     env.DB.prepare(`
@@ -897,15 +933,24 @@ async function fensterWebsiteVisitor(env, value) {
       ORDER BY e.occurred_at ASC
       LIMIT 500
     `).bind(visitorId).all()
+    ,env.DB.prepare(`SELECT conversation_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE visitor_id = ? AND expires_at > ? GROUP BY conversation_id, journey_id, page_path ORDER BY last_message_at DESC`).bind(visitorId, new Date().toISOString()).all()
   ]);
 
   if (!visitor) return json({ error: "Visitor not found" }, 404);
-  return json({ visitor, journeys: journeys.results || [], events: events.results || [] });
+  return json({ visitor, journeys: journeys.results || [], events: events.results || [], chats: chats.results || [] });
+}
+
+async function fensterWebsiteChat(env, value) {
+  const conversationId = websiteChatId(value);
+  if (!conversationId) return json({ error: "Invalid chat" }, 400);
+  const rows = await env.DB.prepare(`SELECT conversation_id, journey_id, visitor_id, page_path, role, body, created_at FROM website_chat_messages WHERE conversation_id = ? AND expires_at > ? ORDER BY created_at ASC`).bind(conversationId, new Date().toISOString()).all();
+  if (!(rows.results || []).length) return json({ error: "Chat not found or expired" }, 404);
+  return json({ conversation_id: conversationId, messages: rows.results });
 }
 
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
-  const [events, journeys, uniqueVisitors, recent, visitors, outcomes, consent, acquisition] = await Promise.all([
+  const [events, journeys, uniqueVisitors, recent, visitors, outcomes, consent, acquisition, chats] = await Promise.all([
     env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ?").bind(since).first(),
@@ -932,6 +977,7 @@ async function fensterWebsiteState(env) {
       GROUP BY v.visitor_id
       ORDER BY v.last_seen_at DESC LIMIT 100
     `).bind(since).all()
+    ,env.DB.prepare(`SELECT conversation_id, visitor_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE expires_at > ? GROUP BY conversation_id, visitor_id, journey_id, page_path ORDER BY last_message_at DESC LIMIT 50`).bind(new Date().toISOString()).all()
     ,env.DB.prepare("SELECT status, COUNT(*) AS count FROM website_lead_outcomes GROUP BY status").all()
     ,env.DB.prepare("SELECT COALESCE(SUM(banner_shown), 0) AS shown, COALESCE(SUM(accepted), 0) AS accepted, COALESCE(SUM(rejected), 0) AS rejected FROM website_consent_daily WHERE day >= ?").bind(since.slice(0, 10)).first()
     ,env.DB.prepare(`
@@ -973,6 +1019,7 @@ async function fensterWebsiteState(env) {
     scrollDepths: totals.scroll_depth || 0,
     quotes: totals.quote_completed || 0,
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
+    chats: chats.results || [],
     recent: recent.results || [],
     visitors: visitors.results || [],
     acquisition: acquisition.results || [],

@@ -247,6 +247,7 @@ let fensterState = null;
 let websiteState = null;
 let websiteView = "overview";
 let websiteVisitorJourney = null;
+let websiteChatTranscript = null;
 let fensterTab = "awaiting";
 let toolsTab = "meta";
 let selectedFensterConversationId = null;
@@ -1768,9 +1769,21 @@ function setToolsTab(tab) {
 }
 
 function setWebsiteView(nextView) {
-  if (!['overview', 'customers'].includes(nextView)) return;
+  if (!['overview', 'customers', 'chats'].includes(nextView)) return;
   websiteView = nextView;
+  websiteChatTranscript = null;
   renderWebsiteTool();
+}
+
+async function openWebsiteChat(conversationId) {
+  try {
+    websiteChatTranscript = await api(`/api/fenster/website/chat/${encodeURIComponent(conversationId)}`);
+    websiteView = 'chats';
+    renderWebsiteTool();
+  } catch (error) {
+    const status = $("#website-status");
+    if (status) status.textContent = error.message;
+  }
 }
 
 async function openWebsiteVisitor(visitorId) {
@@ -1841,8 +1854,9 @@ function renderWebsiteTool() {
     <div class="fenster-tabs website-tabs" aria-label="Website tracker views">
       <button class="${websiteView === "overview" ? "active" : ""}" onclick="window.dashboardWebsiteView('overview')">Overview</button>
       <button class="${websiteView === "customers" ? "active" : ""}" onclick="window.dashboardWebsiteView('customers')">Customer database</button>
+      <button class="${websiteView === "chats" ? "active" : ""}" onclick="window.dashboardWebsiteView('chats')">Legend chats</button>
     </div>
-    ${websiteView === "customers" ? renderWebsiteCustomers() : `
+    ${websiteView === "customers" ? renderWebsiteCustomers() : websiteView === "chats" ? renderWebsiteChats() : `
     <div class="website-recent">
       <div class="panel-header compact">
         <div>
@@ -1925,6 +1939,17 @@ function renderWebsiteCustomers() {
   `;
 }
 
+function renderWebsiteChats() {
+  const chats = websiteState?.chats || [];
+  return `<div class="website-recent"><div class="panel-header compact"><div><h3>Legend chat quality assurance</h3><p class="panel-subtitle">Consent-linked transcripts are available for 30 days. Do not copy personal information into other tools.</p></div></div>${websiteChatTranscript ? renderWebsiteChatTranscript() : ''}${chats.length ? `<div class="table-wrap"><table class="table website-events-table"><thead><tr><th>When</th><th>Visitor</th><th>Started on</th><th>Messages</th><th></th></tr></thead><tbody>${chats.map((chat) => `<tr><td>${escapeHtml(formatDateTime(chat.last_message_at))}</td><td><code>${escapeHtml(chat.visitor_id)}</code></td><td><code>${escapeHtml(chat.page_path || '—')}</code></td><td>${escapeHtml(String(chat.messages || 0))}</td><td><button onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read chat</button></td></tr>`).join('')}</tbody></table></div>` : `<p class="empty">No consent-linked Legend chats have been saved yet.</p>`}</div>`;
+}
+
+function renderWebsiteChatTranscript() {
+  const chat = websiteChatTranscript;
+  const messages = chat?.messages || [];
+  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Legend transcript</span><h3><code>${escapeHtml(chat.conversation_id || '')}</code></h3><p>Quality assurance copy. It expires 30 days after each message.</p></div><button onclick="window.dashboardWebsiteView('chats')">Close <b>×</b></button></div><div class="message-stream">${messages.map((message) => `<div class="message ${message.role === 'assistant' ? 'outbound' : 'inbound'}"><div>${escapeHtml(message.body)}</div><time>${escapeHtml(formatDateTime(message.created_at))} · ${escapeHtml(message.page_path || '—')}</time></div>`).join('')}</div></section>`;
+}
+
 function renderWebsiteVisitor(item) {
   const source = [item.first_source, item.first_medium, item.first_campaign].filter(Boolean).join(" / ") || "Direct or unknown";
   const intent = [
@@ -1945,7 +1970,8 @@ function renderWebsiteJourney() {
   const events = journey.events || [];
   const journeys = journey.journeys || [];
   const references = journeys.map((item) => `<code>${escapeHtml(item.journey_id)}</code>`).join("");
-  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Visitor journey</span><h3><code>${escapeHtml(journey.visitor.visitor_id)}</code></h3><p>${escapeHtml(String(journeys.length || 0))} tracked journey${journeys.length === 1 ? "" : "s"} · anonymous and consented</p><div class="website-journey-refs"><span>WindowCAD tracking reference${journeys.length === 1 ? "" : "s"}</span>${references || "<em>No WindowCAD journey yet</em>"}</div></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close <b>×</b></button></div>${events.length ? `<div class="website-timeline">${events.map(renderWebsiteJourneyEvent).join("")}</div>` : `<p class="empty">No detailed events yet. Page views and time on page begin collecting from this update onward.</p>`}</section>`;
+  const chats = journey.chats || [];
+  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Visitor journey</span><h3><code>${escapeHtml(journey.visitor.visitor_id)}</code></h3><p>${escapeHtml(String(journeys.length || 0))} tracked journey${journeys.length === 1 ? "" : "s"} · anonymous and consented</p><div class="website-journey-refs"><span>WindowCAD tracking reference${journeys.length === 1 ? "" : "s"}</span>${references || "<em>No WindowCAD journey yet</em>"}</div></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close <b>×</b></button></div>${chats.length ? `<div class="website-note"><strong>Legend chats</strong><span>${chats.map((chat) => `<button onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read ${escapeHtml(String(chat.messages))}-message chat</button>`).join(' ')}</span></div>` : ''}${events.length ? `<div class="website-timeline">${events.map(renderWebsiteJourneyEvent).join("")}</div>` : `<p class="empty">No detailed events yet. Page views and time on page begin collecting from this update onward.</p>`}</section>`;
 }
 
 function renderWebsiteJourneyEvent(event) {
@@ -2912,4 +2938,5 @@ window.dashboardToolsTab = setToolsTab;
 window.dashboardWebsiteView = setWebsiteView;
 window.dashboardWebsiteVisitor = openWebsiteVisitor;
 window.dashboardWebsiteCloseVisitor = closeWebsiteVisitor;
+window.dashboardWebsiteChat = openWebsiteChat;
 window.dashboardWebsiteOutcome = setWebsiteOutcome;

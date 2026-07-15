@@ -889,8 +889,8 @@ async function websiteChat({ request, env }) {
   const role = websiteText(body.role, 16);
   const messageId = websiteText(body.message_id, 96);
   const text = websiteText(body.body, 900);
-  if (!conversationId || !journeyId || !visitorId || !messageId || !["user", "assistant"].includes(role) || !text) {
-    return json({ error: "A valid consented chat message is required" }, 400, websiteCorsHeaders(origin));
+  if (!conversationId || !messageId || !["user", "assistant"].includes(role) || !text) {
+    return json({ error: "A valid chat message is required" }, 400, websiteCorsHeaders(origin));
   }
   const now = new Date();
   const expiresAt = new Date(now.getTime() + (30 * 86400000)).toISOString();
@@ -950,7 +950,7 @@ async function fensterWebsiteChat(env, value) {
 
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
-  const [events, journeys, uniqueVisitors, recent, visitors, outcomes, consent, acquisition, chats] = await Promise.all([
+  const [events, journeys, uniqueVisitors, recent, visitors, outcomes, consent, acquisition, chats, chatCount] = await Promise.all([
     env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ?").bind(since).first(),
@@ -969,15 +969,17 @@ async function fensterWebsiteState(env) {
         SUM(CASE WHEN e.event_type IN ('quote_opened', 'quote_iframe_loaded') THEN 1 ELSE 0 END) AS quote_starts,
         SUM(CASE WHEN e.event_type = 'quote_completed' THEN 1 ELSE 0 END) AS quotes,
         SUM(CASE WHEN e.event_type = 'form_submitted' THEN 1 ELSE 0 END) AS forms,
-        SUM(CASE WHEN e.event_type IN ('phone_click', 'email_click') THEN 1 ELSE 0 END) AS contact_clicks
+        SUM(CASE WHEN e.event_type IN ('phone_click', 'email_click') THEN 1 ELSE 0 END) AS contact_clicks,
+        (SELECT COUNT(DISTINCT c.conversation_id) FROM website_chat_messages c WHERE c.visitor_id = v.visitor_id AND c.expires_at > ?) AS legend_chats
       FROM website_visitors v
       LEFT JOIN website_journeys j ON j.visitor_id = v.visitor_id
       LEFT JOIN website_events e ON e.journey_id = j.journey_id
       WHERE v.last_seen_at >= ?
       GROUP BY v.visitor_id
       ORDER BY v.last_seen_at DESC LIMIT 100
-    `).bind(since).all()
+    `).bind(new Date().toISOString(), since).all()
     ,env.DB.prepare(`SELECT conversation_id, visitor_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE expires_at > ? GROUP BY conversation_id, visitor_id, journey_id, page_path ORDER BY last_message_at DESC LIMIT 50`).bind(new Date().toISOString()).all()
+    ,env.DB.prepare("SELECT COUNT(DISTINCT conversation_id) AS count FROM website_chat_messages WHERE expires_at > ?").bind(new Date().toISOString()).first()
     ,env.DB.prepare("SELECT status, COUNT(*) AS count FROM website_lead_outcomes GROUP BY status").all()
     ,env.DB.prepare("SELECT COALESCE(SUM(banner_shown), 0) AS shown, COALESCE(SUM(accepted), 0) AS accepted, COALESCE(SUM(rejected), 0) AS rejected FROM website_consent_daily WHERE day >= ?").bind(since.slice(0, 10)).first()
     ,env.DB.prepare(`
@@ -1019,6 +1021,7 @@ async function fensterWebsiteState(env) {
     scrollDepths: totals.scroll_depth || 0,
     quotes: totals.quote_completed || 0,
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
+    legendChats: Number(chatCount?.count || 0),
     chats: chats.results || [],
     recent: recent.results || [],
     visitors: visitors.results || [],

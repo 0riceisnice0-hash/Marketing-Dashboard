@@ -270,8 +270,9 @@ Each message is linked to the existing `FGV-...` visitor and `FG2-...` journey,
 page path and timestamp, and expires 30 days after it is recorded. The Website
 Tracker's **Legend chats** tab and individual visitor journey show the transcript.
 The dashboard is authenticated, but transcript access is still restricted QA
-data: do not copy personal details into other tools. Rejected-cookie visitors can
-use Legend but must never produce chat tracker events or a dashboard transcript.
+data: do not copy personal details into other tools. After the separate chat
+acknowledgement, rejected-cookie visitors can have a chat-only QA transcript, but
+must never produce a chat tracker event or an `FGV`/`FG2`-linked journey.
 
 ## Common Gotchas
 

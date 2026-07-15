@@ -1842,6 +1842,7 @@ function renderWebsiteTool() {
       ${fensterMetric(websiteState.formStarts || 0, "forms started")}
       ${fensterMetric(websiteState.forms || 0, "forms sent")}
       ${fensterMetric(websiteState.quotes || 0, "WindowCAD quotes")}
+      ${fensterMetric(websiteState.legendChats || 0, "Legend chats")}
       ${fensterMetric(websiteState.outcomes?.won || 0, "won leads")}
       ${fensterMetric(websiteState.calls || 0, "phone or email clicks")}
     </div>
@@ -1941,13 +1942,13 @@ function renderWebsiteCustomers() {
 
 function renderWebsiteChats() {
   const chats = websiteState?.chats || [];
-  return `<div class="website-recent"><div class="panel-header compact"><div><h3>Legend chat quality assurance</h3><p class="panel-subtitle">Consent-linked transcripts are available for 30 days. Do not copy personal information into other tools.</p></div></div>${websiteChatTranscript ? renderWebsiteChatTranscript() : ''}${chats.length ? `<div class="table-wrap"><table class="table website-events-table"><thead><tr><th>When</th><th>Visitor</th><th>Started on</th><th>Messages</th><th></th></tr></thead><tbody>${chats.map((chat) => `<tr><td>${escapeHtml(formatDateTime(chat.last_message_at))}</td><td><code>${escapeHtml(chat.visitor_id)}</code></td><td><code>${escapeHtml(chat.page_path || '—')}</code></td><td>${escapeHtml(String(chat.messages || 0))}</td><td><button onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read chat</button></td></tr>`).join('')}</tbody></table></div>` : `<p class="empty">No consent-linked Legend chats have been saved yet.</p>`}</div>`;
+  return `<div class="website-recent"><div class="panel-header compact"><div><h3>Legend chat quality assurance</h3><p class="panel-subtitle">Transcripts are available for 30 days. Accepted optional cookies link a chat to its anonymous journey; otherwise it remains chat-only.</p></div></div>${websiteChatTranscript ? renderWebsiteChatTranscript() : ''}${chats.length ? `<div class="table-wrap"><table class="table website-events-table"><thead><tr><th>When</th><th>Visitor</th><th>Started on</th><th>Messages</th><th></th></tr></thead><tbody>${chats.map((chat) => `<tr><td>${escapeHtml(formatDateTime(chat.last_message_at))}</td><td>${chat.visitor_id ? `<code>${escapeHtml(chat.visitor_id)}</code>` : '<span class="website-intent">Chat-only</span>'}</td><td><code>${escapeHtml(chat.page_path || '—')}</code></td><td>${escapeHtml(String(chat.messages || 0))}</td><td><button onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read chat</button></td></tr>`).join('')}</tbody></table></div>` : `<p class="empty">No Legend chats have been saved yet.</p>`}</div>`;
 }
 
 function renderWebsiteChatTranscript() {
   const chat = websiteChatTranscript;
   const messages = chat?.messages || [];
-  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Legend transcript</span><h3><code>${escapeHtml(chat.conversation_id || '')}</code></h3><p>Quality assurance copy. It expires 30 days after each message.</p></div><button onclick="window.dashboardWebsiteView('chats')">Close <b>×</b></button></div><div class="message-stream">${messages.map((message) => `<div class="message ${message.role === 'assistant' ? 'outbound' : 'inbound'}"><div>${escapeHtml(message.body)}</div><time>${escapeHtml(formatDateTime(message.created_at))} · ${escapeHtml(message.page_path || '—')}</time></div>`).join('')}</div></section>`;
+  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Legend transcript</span><h3><code>${escapeHtml(chat.conversation_id || '')}</code></h3><p>Quality assurance copy. It expires 30 days after each message.</p></div><button onclick="window.dashboardWebsiteView('chats')">Close <b>×</b></button></div><div class="legend-qa-stream">${messages.map((message) => `<article class="legend-qa-message legend-qa-message--${message.role === 'assistant' ? 'assistant' : 'user'}"><span class="legend-qa-message__author">${message.role === 'assistant' ? 'Legend' : 'Visitor'}</span><p>${escapeHtml(message.body)}</p><time>${escapeHtml(formatDateTime(message.created_at))} · ${escapeHtml(message.page_path || '—')}</time></article>`).join('')}</div></section>`;
 }
 
 function renderWebsiteVisitor(item) {
@@ -1955,6 +1956,7 @@ function renderWebsiteVisitor(item) {
   const intent = [
     Number(item.quote_starts || 0) ? `${item.quote_starts} quote starts` : "",
     Number(item.quotes || 0) ? `${item.quotes} WindowCAD quotes` : "",
+    Number(item.legend_chats || 0) ? `${item.legend_chats} Legend chats` : "",
     Number(item.forms || 0) ? `${item.forms} forms` : "",
     Number(item.contact_clicks || 0) ? `${item.contact_clicks} contact clicks` : ""
   ].filter(Boolean).join(" · ") || "Browsing";

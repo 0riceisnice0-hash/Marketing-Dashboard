@@ -1935,6 +1935,53 @@ dialog::backdrop {
   }
 }
 
+.legend-qa-stream {
+  display: grid;
+  gap: 12px;
+  max-width: 700px;
+  padding: 18px 0 4px;
+}
+
+.legend-qa-message {
+  display: grid;
+  gap: 5px;
+  width: fit-content;
+  max-width: min(88%, 560px);
+  padding: 13px 15px 11px;
+  border: 1px solid #d7e8e0;
+  border-radius: 18px 18px 18px 5px;
+  background: #fff;
+  color: #173b32;
+  box-shadow: 0 8px 18px rgba(20, 64, 51, 0.08);
+}
+
+.legend-qa-message--user {
+  justify-self: end;
+  border-color: #087c61;
+  border-radius: 18px 18px 5px 18px;
+  background: #087c61;
+  color: #fff;
+}
+
+.legend-qa-message__author {
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.legend-qa-message p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.legend-qa-message time {
+  font-size: 0.72rem;
+  opacity: 0.68;
+}
+
 @media (max-width: 860px) {
   .website-hero-card { align-items: start; flex-direction: column; }
   .website-hero-card__status { min-width: 0; padding: 12px 0 0; border-top: 1px solid rgba(255,255,255,.18); border-left: 0; }

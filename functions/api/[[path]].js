@@ -950,7 +950,7 @@ async function fensterWebsiteChat(env, value) {
 
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
-  const [events, journeys, uniqueVisitors, recent, visitors, outcomes, consent, acquisition, chats, chatCount] = await Promise.all([
+  const [events, journeys, uniqueVisitors, recent, visitors, chats, chatCount, outcomes, consent, acquisition] = await Promise.all([
     env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ?").bind(since).first(),

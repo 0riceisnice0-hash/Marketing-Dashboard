@@ -261,6 +261,18 @@ Focus Group phone integration is intentionally pending API, webhook or scheduled
 call-detail export access. Website `phone_click` means dial intent only; it is
 not an answered or confirmed call.
 
+## Legend Chat Quality Assurance
+
+Legend is currently test-site-only. When a visitor has accepted optional cookies
+and the chat acknowledgement, the Website Tracker records anonymous chat events
+and stores the actual user/assistant transcript in `website_chat_messages`.
+Each message is linked to the existing `FGV-...` visitor and `FG2-...` journey,
+page path and timestamp, and expires 30 days after it is recorded. The Website
+Tracker's **Legend chats** tab and individual visitor journey show the transcript.
+The dashboard is authenticated, but transcript access is still restricted QA
+data: do not copy personal details into other tools. Rejected-cookie visitors can
+use Legend but must never produce chat tracker events or a dashboard transcript.
+
 ## Common Gotchas
 
 - Pushing to GitHub may not update the live Cloudflare app. Run the Wrangler Pages deploy command.

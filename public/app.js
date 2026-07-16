@@ -1845,6 +1845,8 @@ function renderWebsiteTool() {
       ${fensterMetric(websiteState.legendChats || 0, "Legend chats")}
       ${fensterMetric(websiteState.outcomes?.won || 0, "won leads")}
       ${fensterMetric(websiteState.calls || 0, "phone or email clicks")}
+      ${fensterMetric(websiteState.statistical?.pageViews || 0, "non-consented page views / 30 days")}
+      ${fensterMetric(websiteState.statistical?.quoteStarts || 0, "non-consented quote starts")}
     </div>
     ${renderWebsiteFunnel()}
     <div class="website-note">

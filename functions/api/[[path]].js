@@ -27,6 +27,8 @@ export async function onRequest(context) {
     if (route === "website/chat" && context.request.method === "POST") return websiteChat(context);
     if (route === "website/consent" && context.request.method === "OPTIONS") return websiteCors(context.request);
     if (route === "website/consent" && context.request.method === "POST") return websiteConsent(context);
+    if (route === "website/stat" && context.request.method === "OPTIONS") return websiteCors(context.request);
+    if (route === "website/stat" && context.request.method === "POST") return websiteStat(context);
     if (route === "login" && context.request.method === "POST") return login(context);
     if (route === "logout") return logout(context);
 
@@ -722,6 +724,19 @@ const WEBSITE_EVENT_TYPES = new Set([
   "quote_completed"
 ]);
 
+// This endpoint is deliberately aggregate-only. It accepts no visitor or
+// journey identifier and stores only hourly buckets for statistical purposes.
+const WEBSITE_STAT_TYPES = new Set([
+  "page_view",
+  "page_engaged",
+  "quote_opened",
+  "quote_iframe_loaded",
+  "form_started",
+  "form_submitted",
+  "phone_click",
+  "email_click"
+]);
+
 function websiteCors(request) {
   const origin = request.headers.get("Origin") || "";
   return new Response(null, { status: 204, headers: websiteCorsHeaders(origin) });
@@ -874,6 +889,53 @@ async function websiteConsent({ request, env }) {
   return json({ ok: true }, 201, websiteCorsHeaders(origin));
 }
 
+function websiteStatPath(value) {
+  const path = websiteText(value, 240).split(/[?#]/, 1)[0];
+  return path.startsWith("/") ? path : "/";
+}
+
+function websiteStatDevice(value, userAgent = "") {
+  if (/bot|crawler|spider|headless|preview|lighthouse|pagespeed/i.test(userAgent)) return "bot";
+  const requested = websiteText(value, 16).toLowerCase();
+  if (["mobile", "tablet", "desktop"].includes(requested)) return requested;
+  return /tablet|ipad/i.test(userAgent) ? "tablet" : /mobi|android/i.test(userAgent) ? "mobile" : "desktop";
+}
+
+async function websiteStat({ request, env }) {
+  const origin = request.headers.get("Origin") || "";
+  const bodyText = await request.text();
+  let body = {};
+  try { body = JSON.parse(bodyText || "{}"); } catch {}
+
+  const signed = Boolean(env.WEBSITE_INGEST_SECRET)
+    && request.headers.get("X-Fenster-Website-Secret") === env.WEBSITE_INGEST_SECRET;
+  if (!signed && !isFensterWebsiteOrigin(origin)) {
+    return json({ error: "Untrusted website statistic" }, 403, websiteCorsHeaders(origin));
+  }
+
+  const event = websiteText(body.event, 40);
+  if (!WEBSITE_STAT_TYPES.has(event)) {
+    return json({ error: "Unsupported website statistic" }, 400, websiteCorsHeaders(origin));
+  }
+
+  const now = new Date();
+  const day = now.toISOString().slice(0, 10);
+  const hourUtc = now.getUTCHours();
+  const pagePath = websiteStatPath(body.page_path);
+  const referrerHost = websiteText(body.referrer_host, 180).toLowerCase().replace(/[^a-z0-9.-]/g, "");
+  const deviceType = websiteStatDevice(body.device_type, request.headers.get("User-Agent") || "");
+
+  await env.DB.prepare(`
+    INSERT INTO website_statistical_aggregate
+      (day, hour_utc, event_type, page_path, referrer_host, device_type, count)
+    VALUES (?, ?, ?, ?, ?, ?, 1)
+    ON CONFLICT(day, hour_utc, event_type, page_path, referrer_host, device_type)
+    DO UPDATE SET count = website_statistical_aggregate.count + 1
+  `).bind(day, hourUtc, event, pagePath, referrerHost, deviceType).run();
+
+  return json({ ok: true }, 201, websiteCorsHeaders(origin));
+}
+
 function websiteChatId(value) {
   const id = websiteText(value, 96).toUpperCase();
   return /^CHT-[A-Z0-9-]{8,80}$/.test(id) ? id : "";
@@ -950,7 +1012,7 @@ async function fensterWebsiteChat(env, value) {
 
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
-  const [events, journeys, uniqueVisitors, recent, visitors, chats, chatCount, outcomes, consent, acquisition] = await Promise.all([
+  const [events, journeys, uniqueVisitors, recent, visitors, chats, chatCount, outcomes, consent, acquisition, statistical] = await Promise.all([
     env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ?").bind(since).first(),
@@ -1002,6 +1064,16 @@ async function fensterWebsiteState(env) {
       ORDER BY quotes DESC, forms DESC, quote_starts DESC, visitors DESC
       LIMIT 12
     `).bind(since).all()
+    ,env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN event_type = 'page_view' THEN count ELSE 0 END), 0) AS page_views,
+        COALESCE(SUM(CASE WHEN event_type IN ('quote_opened', 'quote_iframe_loaded') THEN count ELSE 0 END), 0) AS quote_starts,
+        COALESCE(SUM(CASE WHEN event_type = 'form_started' THEN count ELSE 0 END), 0) AS form_starts,
+        COALESCE(SUM(CASE WHEN event_type = 'form_submitted' THEN count ELSE 0 END), 0) AS forms,
+        COALESCE(SUM(CASE WHEN event_type IN ('phone_click', 'email_click') THEN count ELSE 0 END), 0) AS contact_clicks
+      FROM website_statistical_aggregate
+      WHERE day >= ? AND device_type <> 'bot'
+    `).bind(since.slice(0, 10)).first()
   ]);
   const totals = Object.fromEntries((events.results || []).map((row) => [row.event_type, Number(row.count || 0)]));
   const quoteJourneys = await env.DB.prepare(`
@@ -1026,6 +1098,13 @@ async function fensterWebsiteState(env) {
     recent: recent.results || [],
     visitors: visitors.results || [],
     acquisition: acquisition.results || [],
+    statistical: {
+      pageViews: Number(statistical?.page_views || 0),
+      quoteStarts: Number(statistical?.quote_starts || 0),
+      formStarts: Number(statistical?.form_starts || 0),
+      forms: Number(statistical?.forms || 0),
+      contactClicks: Number(statistical?.contact_clicks || 0)
+    },
     consent: { shown: Number(consent?.shown || 0), accepted: Number(consent?.accepted || 0), rejected: Number(consent?.rejected || 0) },
     outcomes: Object.fromEntries((outcomes.results || []).map((row) => [row.status, Number(row.count || 0)]))
   });

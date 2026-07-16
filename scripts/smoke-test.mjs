@@ -21,7 +21,8 @@ const tables = {
     { key: "bot_active", value: "false" },
     { key: "ai_prompt_context", value: "Never say warranties or guarantees are transferable." }
   ],
-  fenster_bot_queue: []
+  fenster_bot_queue: [],
+  website_statistical_aggregate: []
 };
 
 let forcedUuid = 1;
@@ -100,6 +101,15 @@ const perryLogin = await call("/api/login", {
 });
 
 assert(perryLogin.status === 200, "Perry should share the dashboard password");
+
+const anonymousStat = await call("/api/website/stat", {
+  method: "POST",
+  headers: { Origin: "https://www.fensterglazing.com", "Content-Type": "text/plain;charset=UTF-8" },
+  body: JSON.stringify({ event: "page_view", page_path: "/", device_type: "desktop", referrer_host: "www.google.com", origin: "https://www.fensterglazing.com" })
+});
+assert(anonymousStat.status === 201, "anonymous statistical event should be accepted");
+assert(tables.website_statistical_aggregate.length > 0, "anonymous statistical event should be stored in the aggregate table");
+assert(!tables.website_visitors || tables.website_visitors.length === 0, "anonymous statistical event should not create a visitor record");
 
 const ticket = await call("/api/records/tickets", {
   method: "POST",
@@ -408,6 +418,7 @@ function queryFirst({ sql, values }) {
 }
 
 function run({ sql, values }) {
+  sql = sql.trim();
   const table = tableFrom(sql);
   if (sql.startsWith("INSERT")) {
     const columns = sql.match(/\(([^)]+)\)/)[1].split(",").map((value) => value.trim());

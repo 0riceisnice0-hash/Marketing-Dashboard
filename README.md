@@ -123,6 +123,7 @@ Fenster bot tables:
 - `fenster_bot_queue`
 - `website_journeys` (opaque `FG2-…` journey references and first-touch attribution)
 - `website_events` (quote starts, forms, contact clicks and completed WindowCAD quotes; no customer PII)
+- `website_statistical_aggregate` (hourly aggregate-only statistics for non-consented traffic; no visitor IDs or journeys)
 
 ## Login And Secrets
 
@@ -250,6 +251,12 @@ the office/CRM but must never create or join a dashboard journey. Consent health
 uses daily aggregate-only `accepted` and `rejected` counters, with no visitor
 ID, URL, referrer, device or personal data. Banner impressions are deliberately
 not counted because anonymous crawler/session traffic makes them unreliable.
+
+The separate statistical aggregate endpoint may count non-consented page views and
+high-level interaction totals for website improvement. It stores only hourly
+buckets by page, broad device class and referrer host. It must not be used for
+individual tracking, advertising measurement, remarketing, cross-site attribution
+or lead joins.
 
 Required configuration (never commit either secret):
 

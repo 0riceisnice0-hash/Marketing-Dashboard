@@ -37,9 +37,15 @@ An `FG2` is not expected to equal the visitor's `FGV`: it is the reference that 
 
 - Accepted optional cookies are required for a persistent `FGV`, an `FG2`, browsing events, attribution and WindowCAD joining.
 - A returning consenting browser normally keeps the same `FGV` for 90 days. Incognito, cleared site storage, a new browser/device or an expired ID becomes a different visitor.
-- Rejected/no-choice visitors can still submit a WindowCAD quote or website form to the office, but they do **not** get a tracker visitor, journey or browsing record.
+- Rejected/no-choice visitors can still submit a WindowCAD quote or website form to the office, but they do **not** get a consented tracker visitor, journey or individual browsing record. Separate aggregate-only statistical totals may include their page views and high-level actions.
 - Consent Health is aggregate-only: choices recorded, accepted, rejected and acceptance rate. It is never tied to a visitor, page, source, device or journey.
 - Banner impressions are intentionally not counted. Crawlers and pre-consent sessions made that figure misleading.
+
+### Non-consented statistical traffic
+
+The dashboard also keeps a separate `website_statistical_aggregate` table for visitors who have not accepted optional cookies. This is aggregate-only measurement for website health: hourly page views, engagement, quote starts, form starts/sends and phone/email intent, grouped by page, broad device class and referrer host. It never receives `FGV`/`FG2`, creates a visitor or journey, or joins a lead to a person.
+
+The individual browser request is reduced into an hourly bucket at ingestion. Do not add visitor IDs, IP-derived keys, fingerprints, ad click IDs, customer values or per-person timelines to this table. It must remain solely for improving the website. Consent is still required for individual journey tracking, ad measurement, remarketing or cross-site/cross-device attribution.
 
 ## How to read the dashboard
 

@@ -220,6 +220,10 @@ Only run remote migrations when a code change actually needs schema changes.
 
 ## Website / WindowCAD Attribution
 
+Read [WEBSITE-TRACKER.md](WEBSITE-TRACKER.md) before interpreting the Website
+Tracker or changing its consent, WindowCAD or chat behaviour. It is the
+operator-facing source of truth for data meanings and limits.
+
 The Fenster theme creates an opaque `FG2-…` reference for a quote journey and
 appends it to WindowCAD URLs only after optional-cookie acceptance, using the configured `tracking` parameter.
 WindowCAD must map that URL parameter into its separate **Tracking** customer
@@ -263,16 +267,14 @@ not an answered or confirmed call.
 
 ## Legend Chat Quality Assurance
 
-Legend is currently test-site-only. When a visitor has accepted optional cookies
-and the chat acknowledgement, the Website Tracker records anonymous chat events
-and stores the actual user/assistant transcript in `website_chat_messages`.
-Each message is linked to the existing `FGV-...` visitor and `FG2-...` journey,
-page path and timestamp, and expires 30 days after it is recorded. The Website
-Tracker's **Legend chats** tab and individual visitor journey show the transcript.
-The dashboard is authenticated, but transcript access is still restricted QA
-data: do not copy personal details into other tools. After the separate chat
-acknowledgement, rejected-cookie visitors can have a chat-only QA transcript, but
-must never produce a chat tracker event or an `FGV`/`FG2`-linked journey.
+Legend is live. Its composer is immediately available; using it accepts the
+displayed chat terms. The Website Tracker stores the actual user/assistant
+transcript in `website_chat_messages` for 30 days for authenticated QA review.
+Accepted-cookie chats link to the existing `FGV-...` visitor, `FG2-...` journey,
+page path and timestamp and appear in the visitor timeline and **Legend chats**.
+Rejected-cookie chats are deliberately chat-only: they have no `FGV`/`FG2`,
+journey, browsing events or attribution but remain visible in **Legend chats**.
+Do not copy transcript personal details into other tools.
 
 ## Common Gotchas
 

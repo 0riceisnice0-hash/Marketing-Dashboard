@@ -116,7 +116,7 @@ Other useful future additions, subject to consent and data minimisation, are off
 
 | Symptom | Check first |
 | --- | --- |
-| WindowCAD completion is missing | Confirm the quote URL uses `tracking`, WindowCAD writes it to its **Tracking** field, the value starts `FG2-`, and the WordPress callback has run. |
+| WindowCAD completion is missing | Confirm the quote URL uses `tracking`, WindowCAD writes it to its **Tracking** field, the value starts `FG2-`, and the WordPress callback has run. **Known failure (July 2026): editing the WindowCAD website designer form settings removed the Tracking property from the form field list, so the URL parameter had nothing to fill.** The Tracking property must be in the retail and door designer `projectInfoProperties`, not just defined on the account. The Overview tab shows an amber alert counting completions that arrive without a tracking reference (relayed server-side into the aggregate statistics as `quote_completed`), so this failure is visible within a day. |
 | A WindowCAD row has `FG2` but no customer match | Search the Customer database/timeline for that `FG2`; it should appear as a completed quote event against an `FGV` visitor. If it does not, inspect the relay rather than creating office test quotes. |
 | Meta is not visible as a source | Confirm the live ad URL carries the UTM parameters and test a fresh, consented browser journey. |
 | Consent Health is zero | Check that a fresh visitor makes an accept/reject choice, then confirm the dashboard API/state response and deployed frontend. Banner impressions are not a valid comparison. |

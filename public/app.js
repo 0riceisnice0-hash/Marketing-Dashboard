@@ -249,7 +249,7 @@ let websiteView = "overview";
 let websiteVisitorJourney = null;
 let websiteChatTranscript = null;
 let fensterTab = "awaiting";
-let toolsTab = "meta";
+let toolsTab = "hub";
 let selectedFensterConversationId = null;
 let current = "dashboard";
 let selectedProjectKey = "";
@@ -383,9 +383,12 @@ async function refreshDashboard() {
     notifyNewItems(next);
     state = next;
     if (current === "projects" && selectedProjectKey === "tools") {
-      await api("/api/fenster/meta/sync", { method: "POST", body: {} });
-      await loadFenster(true);
-      await loadWebsite(true);
+      if (toolsTab === "meta") {
+        await api("/api/fenster/meta/sync", { method: "POST", body: {} });
+        await loadFenster(true);
+      } else if (toolsTab === "website") {
+        await loadWebsite(true);
+      }
     }
     else render();
   } catch (error) {
@@ -1363,18 +1366,7 @@ function renderProjects() {
 function renderProjectDetail(key) {
   const project = projectAreas.find((item) => item.key === key) || projectAreas.at(-1);
   if (key === "tools") {
-    view.innerHTML = `
-      <div class="project-detail-head">
-        <button onclick="window.dashboardBackToProjects()">Back to projects</button>
-        <div>
-          <span class="project-source">Project</span>
-          <h3>${escapeHtml(project.name)}</h3>
-          <p>${escapeHtml(project.text)}</p>
-        </div>
-      </div>
-      ${renderToolsPanel()}
-    `;
-    loadCurrentTool(true);
+    renderToolsArea();
     return;
   }
   const items = projectItems(key);
@@ -1709,69 +1701,114 @@ function renderWebsite() {
   `;
 }
 
-function renderTools() {
-  view.innerHTML = renderToolsPanel();
+const TOOL_ICONS = {
+  meta: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.3 8.9 8.9 0 0 1-3.7-.8L3 20l1.1-5.2a8 8 0 0 1-.6-3.3A8.4 8.4 0 0 1 12 3.2a8.4 8.4 0 0 1 9 8.3Z"/><path d="M8 10.5h8M8 13.5h5"/></svg>`,
+  website: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-8M21 19H3"/><circle cx="16" cy="6.5" r="2.3"/></svg>`,
+  back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>`
+};
+
+function setToolsChrome(title, eyebrow) {
+  $("#view-title").textContent = title;
+  const node = document.querySelector(".topbar .eyebrow");
+  if (node) node.textContent = eyebrow;
+}
+
+function renderToolsArea() {
+  if (toolsTab === "meta") {
+    setToolsChrome("Fenster Meta Bot", "Tools");
+    return renderMetaToolShell();
+  }
+  if (toolsTab === "website") {
+    setToolsChrome("Website Tracker", "Tools");
+    return renderWebsiteToolShell();
+  }
+  setToolsChrome("Tools", "Live operational tools");
+  renderToolsHub();
+}
+
+function renderToolsHub() {
+  view.innerHTML = `
+    <div class="tools-head">
+      <button class="tools-back" onclick="window.dashboardBackToProjects()">${TOOL_ICONS.back}<span>Projects</span></button>
+      <div>
+        <span class="project-source">Project</span>
+        <h3>Tools</h3>
+        <p>Live operational tools. Pick one to open it full screen.</p>
+      </div>
+    </div>
+    <div class="tools-hub">
+      <button class="tool-card tool-card--meta" onclick="window.dashboardToolsTab('meta')">
+        <span class="tool-card__icon">${TOOL_ICONS.meta}</span>
+        <span class="tool-card__body">
+          <strong>Fenster Meta Bot</strong>
+          <span>Facebook inbox, AI draft replies, office forwarding and approval-only sending.</span>
+        </span>
+        <span class="tool-card__go">Open<b>›</b></span>
+      </button>
+      <button class="tool-card tool-card--website" onclick="window.dashboardToolsTab('website')">
+        <span class="tool-card__icon">${TOOL_ICONS.website}</span>
+        <span class="tool-card__body">
+          <strong>Website Tracker</strong>
+          <span>Consented visitor journeys, WindowCAD quote outcomes, forms, calls and Legend chats.</span>
+        </span>
+        <span class="tool-card__go">Open<b>›</b></span>
+      </button>
+    </div>
+  `;
+}
+
+function renderMetaToolShell() {
+  view.innerHTML = `
+    <div class="tools-head">
+      <button class="tools-back" onclick="window.dashboardToolsTab('hub')">${TOOL_ICONS.back}<span>Tools</span></button>
+      <div>
+        <span class="project-source">Tools</span>
+        <h3>Fenster Meta Bot</h3>
+        <p>Facebook inbox, draft replies, office forwarding, and approval-only sending.</p>
+      </div>
+      <div class="tools-head__actions">
+        <button class="tool-action" onclick="window.dashboardFensterSync()">Sync Facebook</button>
+        <button class="tool-action" onclick="window.dashboardFensterRefresh()">Refresh</button>
+      </div>
+    </div>
+    <p id="fenster-status" class="result-note">Loading Fenster Meta Bot...</p>
+    <div id="fenster-app" class="fenster-app"></div>
+  `;
   loadCurrentTool(true);
 }
 
-function renderToolsPanel() {
-  return `
-    <div class="fenster-tabs tools-tabs" aria-label="Tools">
-      <button class="${toolsTab === "meta" ? "active" : ""}" onclick="window.dashboardToolsTab('meta')">Fenster Meta Tool</button>
-      <button class="${toolsTab === "website" ? "active" : ""}" onclick="window.dashboardToolsTab('website')">Website Tracker</button>
+function renderWebsiteToolShell() {
+  view.innerHTML = `
+    <div class="tools-head">
+      <button class="tools-back" onclick="window.dashboardToolsTab('hub')">${TOOL_ICONS.back}<span>Tools</span></button>
+      <div>
+        <span class="project-source">Tools</span>
+        <h3>Website Tracker</h3>
+        <p>Consent-led attribution. Customer details stay in WordPress and AdminBase.</p>
+      </div>
+      <div class="tools-head__actions">
+        <button class="tool-action" onclick="window.dashboardWebsiteRefresh()">Refresh</button>
+      </div>
     </div>
-    ${toolsTab === "website" ? renderWebsiteToolPanel() : renderMetaToolPanel()}
+    <p id="website-status" class="result-note">Loading website reporting...</p>
+    <div id="website-app" class="website-app"></div>
   `;
-}
-
-function renderMetaToolPanel() {
-  return `
-    <section class="panel fenster-tool">
-      <div class="panel-header">
-        <div>
-          <h3>Fenster Meta Bot</h3>
-          <p class="panel-subtitle">Facebook inbox, draft replies, office forwarding, and approval-only sending. This stays because it does real work.</p>
-        </div>
-        <div class="actions tool-actions">
-          <button onclick="window.dashboardFensterSeed()">Seed demo</button>
-          <button onclick="window.dashboardFensterSync()">Sync Facebook</button>
-          <button onclick="window.dashboardFensterRefresh()">Refresh</button>
-        </div>
-      </div>
-      <p id="fenster-status" class="result-note">Loading Fenster Meta Bot...</p>
-      <div id="fenster-app" class="fenster-app"></div>
-    </section>
-  `;
-}
-
-function renderWebsiteToolPanel() {
-  return `
-    <section class="panel fenster-tool website-tool">
-      <div class="panel-header">
-        <div>
-          <h3>Website</h3>
-          <p class="panel-subtitle">One place for consented website journeys, WindowCAD quote outcomes, forms and contact intent. Customer details stay in WordPress and AdminBase.</p>
-        </div>
-        <div class="actions tool-actions">
-          <button onclick="window.dashboardWebsiteRefresh()">Refresh</button>
-        </div>
-      </div>
-      <p id="website-status" class="result-note">Loading website reporting...</p>
-      <div id="website-app" class="website-app"></div>
-    </section>
-  `;
+  loadCurrentTool(true);
 }
 
 function setToolsTab(tab) {
-  if (!["meta", "website"].includes(tab)) return;
+  if (!["hub", "meta", "website"].includes(tab)) return;
   toolsTab = tab;
+  websiteVisitorJourney = null;
+  websiteChatTranscript = null;
   render();
 }
 
 function setWebsiteView(nextView) {
-  if (!['overview', 'customers', 'chats'].includes(nextView)) return;
+  if (!["overview", "acquisition", "pages", "customers", "chats"].includes(nextView)) return;
   websiteView = nextView;
   websiteChatTranscript = null;
+  websiteVisitorJourney = null;
   renderWebsiteTool();
 }
 
@@ -1803,7 +1840,7 @@ function closeWebsiteVisitor() {
 
 async function loadCurrentTool(force = false) {
   if (toolsTab === "website") return loadWebsite(force);
-  return loadFenster(force);
+  if (toolsTab === "meta") return loadFenster(force);
 }
 
 async function loadWebsite(force = false) {
@@ -1820,131 +1857,358 @@ async function loadWebsite(force = false) {
   }
 }
 
+function wtFmt(value) {
+  return Number(value || 0).toLocaleString("en-GB");
+}
+
+function wtSeconds(value) {
+  const seconds = Number(value || 0);
+  if (!seconds) return "—";
+  return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+}
+
 function renderWebsiteTool() {
   const mount = $("#website-app");
   if (!mount || !websiteState) return;
-  const recent = websiteState.recent || [];
+  const views = [
+    ["overview", "Overview", 0],
+    ["acquisition", "Acquisition", 0],
+    ["pages", "Pages", 0],
+    ["customers", "Customers", (websiteState.visitors || []).length],
+    ["chats", "Legend chats", (websiteState.chats || []).length]
+  ];
+  const body = ({
+    overview: wtOverview,
+    acquisition: wtAcquisition,
+    pages: wtPages,
+    customers: wtCustomers,
+    chats: wtChats
+  })[websiteView] || wtOverview;
   mount.innerHTML = `
-    <div class="website-dashboard">
-    <section class="website-hero-card">
-      <div>
-        <span class="website-kicker"><i></i> Consent-led tracking</span>
-        <h3>Website growth, without the guesswork.</h3>
-        <p>Follow anonymous visitors from first touch to quote, form or call intent — then see exactly what they did on the way.</p>
-      </div>
-      <div class="website-hero-card__status"><strong>Last ${websiteState.periodDays || 30} days</strong><span>Live WindowCAD join</span></div>
-    </section>
-    ${renderWebsiteConsentHealth()}
-    <div class="fenster-metrics website-metrics">
-      ${fensterMetric(websiteState.uniqueVisitors || 0, `unique visitors / ${websiteState.periodDays || 30} days`)}
-      ${fensterMetric(websiteState.journeys || 0, `journeys / ${websiteState.periodDays || 30} days`)}
-      ${fensterMetric(websiteState.quoteJourneys || 0, "quote starts")}
-      ${fensterMetric(websiteState.formStarts || 0, "forms started")}
-      ${fensterMetric(websiteState.forms || 0, "forms sent")}
-      ${fensterMetric(websiteState.quotes || 0, "WindowCAD quotes")}
-      ${fensterMetric(websiteState.legendChats || 0, "Legend chats")}
-      ${fensterMetric(websiteState.outcomes?.won || 0, "won leads")}
-      ${fensterMetric(websiteState.calls || 0, "phone or email clicks")}
-      ${fensterMetric(websiteState.statistical?.pageViews || 0, "non-consented page views / 30 days")}
-      ${fensterMetric(websiteState.statistical?.quoteStarts || 0, "non-consented quote starts")}
+    <nav class="wt-nav" aria-label="Website tracker views">
+      ${views.map(([id, label, count]) => `
+        <button class="wt-nav__item ${websiteView === id ? "is-active" : ""}" onclick="window.dashboardWebsiteView('${id}')">
+          <span>${label}</span>${count ? `<b>${wtFmt(count)}</b>` : ""}
+        </button>
+      `).join("")}
+    </nav>
+    <div class="wt-body">${body()}</div>
+  `;
+}
+
+function wtOverview() {
+  const s = websiteState;
+  const kpis = [
+    [s.uniqueVisitors, "Consented visitors", "last 30 days"],
+    [s.journeys, "Journeys", "visits recorded"],
+    [s.quoteJourneys, "Quote starts", "tool opened or loaded"],
+    [s.quotes, "WindowCAD quotes", "consented completions"],
+    [s.forms, "Forms sent", `${wtFmt(s.formStarts)} started`],
+    [s.calls, "Phone / email clicks", "contact intent only"],
+    [s.legendChats, "Legend chats", "saved for 30-day QA"],
+    [s.outcomes?.won || 0, "Won leads", "marked by the office"]
+  ];
+  return `
+    ${wtTrackingAlert()}
+    <div class="wt-kpis">${kpis.map(([value, label, hint]) => `
+      <article class="wt-kpi"><strong>${wtFmt(value)}</strong><span>${label}</span><small>${hint}</small></article>
+    `).join("")}</div>
+    ${wtTrend()}
+    <div class="wt-grid wt-grid--two">
+      ${wtFunnel()}
+      ${wtConsent()}
     </div>
-    ${renderWebsiteFunnel()}
-    <div class="website-note">
-      <strong>How the join works</strong>
-      <span>An opaque <code>FG2-…</code> reference follows every WindowCAD launch. When WindowCAD calls WordPress, the server records the quote outcome against that journey without sending customer PII here.</span>
-    </div>
-    ${renderWebsiteDecisionPanel()}
-    <div class="fenster-tabs website-tabs" aria-label="Website tracker views">
-      <button class="${websiteView === "overview" ? "active" : ""}" onclick="window.dashboardWebsiteView('overview')">Overview</button>
-      <button class="${websiteView === "customers" ? "active" : ""}" onclick="window.dashboardWebsiteView('customers')">Customer database</button>
-      <button class="${websiteView === "chats" ? "active" : ""}" onclick="window.dashboardWebsiteView('chats')">Legend chats</button>
-    </div>
-    ${websiteView === "customers" ? renderWebsiteCustomers() : websiteView === "chats" ? renderWebsiteChats() : `
-    <div class="website-recent">
-      <div class="panel-header compact">
-        <div>
-          <h3>Recent lead outcomes</h3>
-          <p class="panel-subtitle">The source, campaign and landing page are captured from the first website event.</p>
-        </div>
-      </div>
-      ${recent.length ? `
-        <div class="table-wrap"><table class="table website-events-table">
-          <thead><tr><th>When</th><th>Outcome</th><th>Source</th><th>Landing page</th><th>Product / value</th></tr></thead>
-          <tbody>${recent.map(renderWebsiteEvent).join("")}</tbody>
-        </table></div>
-      ` : `<p class="empty">No website outcomes yet. The test journey will appear here once the WindowCAD Reference field has returned through the callback.</p>`}
-    </div>
-    `}
+    ${wtDecision()}
+    ${wtRecentLeads()}
+  `;
+}
+
+function wtTrackingAlert() {
+  const missed = Number(websiteState.statistical?.quoteCompletions || 0);
+  if (!missed) return "";
+  return `
+    <div class="wt-alert">
+      <strong>${wtFmt(missed)} WindowCAD quote${missed === 1 ? "" : "s"} completed without a tracking reference</strong>
+      <span>Counted as aggregate totals only. Some are expected from rejected/no-choice visitors or office-entered quotes, but if consented WindowCAD quotes sit at zero while this rises, check that the WindowCAD website form still includes the Tracking field.</span>
     </div>
   `;
 }
 
-function renderWebsiteConsentHealth() {
-  const consent = websiteState?.consent || {};
+function wtTrend() {
+  const days = [];
+  for (let i = 29; i >= 0; i--) {
+    days.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+  }
+  const events = Object.fromEntries((websiteState.series?.events || []).map((row) => [row.day, row]));
+  const stats = Object.fromEntries((websiteState.series?.statistical || []).map((row) => [row.day, row]));
+  const rows = days.map((day) => ({
+    day,
+    consented: Number(events[day]?.page_views || 0),
+    anonymous: Number(stats[day]?.page_views || 0),
+    leads: Number(events[day]?.leads || 0)
+  }));
+  const max = Math.max(1, ...rows.map((row) => row.consented + row.anonymous));
+  const slot = 22;
+  const width = rows.length * slot;
+  const bars = rows.map((row, index) => {
+    const x = index * slot + 3;
+    const consentedHeight = Math.round((row.consented / max) * 118);
+    const anonymousHeight = Math.round((row.anonymous / max) * 118);
+    const stackTop = 130 - consentedHeight - anonymousHeight;
+    return `
+      <g>
+        <title>${row.day}: ${row.consented} consented + ${row.anonymous} anonymous page views${row.leads ? ` · ${row.leads} lead${row.leads === 1 ? "" : "s"}` : ""}</title>
+        <rect x="${x}" y="128" width="${slot - 6}" height="2" rx="1" class="wt-bar wt-bar--base"></rect>
+        ${anonymousHeight ? `<rect x="${x}" y="${stackTop}" width="${slot - 6}" height="${anonymousHeight}" rx="2" class="wt-bar wt-bar--anon"></rect>` : ""}
+        ${consentedHeight ? `<rect x="${x}" y="${130 - consentedHeight}" width="${slot - 6}" height="${consentedHeight}" rx="2" class="wt-bar wt-bar--consented"></rect>` : ""}
+        ${row.leads ? `<circle cx="${x + (slot - 6) / 2}" cy="${Math.max(8, stackTop - 8)}" r="4" class="wt-lead-dot"></circle>` : ""}
+      </g>`;
+  }).join("");
+  const labels = [0, 10, 20, 29].map((index) => `
+    <text x="${index * slot + 3}" y="146" class="wt-axis-label">${rows[index].day.slice(5)}</text>
+  `).join("");
+  return `
+    <section class="wt-panel wt-trend">
+      <header class="wt-panel__head">
+        <div><h4>Daily traffic and leads</h4><p>Page views for the last 30 days. Dots mark days with a completed quote or sent form.</p></div>
+        <div class="wt-legend">
+          <span><i class="wt-swatch wt-swatch--consented"></i>Consented</span>
+          <span><i class="wt-swatch wt-swatch--anon"></i>Anonymous</span>
+          <span><i class="wt-swatch wt-swatch--lead"></i>Lead day</span>
+        </div>
+      </header>
+      <div class="wt-trend__scroll"><svg viewBox="0 0 ${width} 150" class="wt-trend__chart" role="img" aria-label="Daily page views for the last 30 days">${bars}${labels}</svg></div>
+    </section>
+  `;
+}
+
+function wtFunnel() {
+  const steps = [
+    ["Consented visitors", Number(websiteState.uniqueVisitors || 0), "accepted optional cookies"],
+    ["CTA clicks", Number(websiteState.ctaClicks || 0), "chose a commercial action"],
+    ["Quote starts", Number(websiteState.quoteJourneys || 0), "quote tool loaded or opened"],
+    ["Leads", Number(websiteState.quotes || 0) + Number(websiteState.forms || 0), "quote completed or form sent"]
+  ];
+  const max = Math.max(1, ...steps.map(([, value]) => value));
+  const leadRate = steps[0][1] ? Math.round((steps[3][1] / steps[0][1]) * 100) : 0;
+  return `
+    <section class="wt-panel wt-funnel">
+      <header class="wt-panel__head">
+        <div><h4>Conversion funnel</h4><p>Where consented visitors fall away.</p></div>
+        <strong class="wt-panel__figure">${leadRate}%<small>visitor to lead</small></strong>
+      </header>
+      <div class="wt-funnel__steps">
+        ${steps.map(([label, value, hint], index) => `
+          <div class="wt-funnel__step">
+            <span class="wt-funnel__label"><b>${index + 1}</b>${label}</span>
+            <span class="wt-funnel__bar"><i style="width:${Math.max(3, Math.round((value / max) * 100))}%"></i></span>
+            <span class="wt-funnel__value">${wtFmt(value)}</span>
+            <small>${hint}</small>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function wtConsent() {
+  const consent = websiteState.consent || {};
   const accepted = Number(consent.accepted || 0);
   const rejected = Number(consent.rejected || 0);
   const answered = accepted + rejected;
   const rate = answered ? Math.round((accepted / answered) * 100) : 0;
-  return `<section class="website-consent-health"><div><span>Consent health</span><h3>How representative is your journey data?</h3><p>Aggregate choices only. Banner impressions are intentionally not counted because anonymous sessions and crawlers make that number unreliable.</p></div><div class="website-consent-health__figures"><article><strong>${answered}</strong><span>Choices recorded</span></article><article><strong>${accepted}</strong><span>Accepted</span></article><article><strong>${rejected}</strong><span>Rejected</span></article><article class="website-consent-health__rate"><strong>${rate}%</strong><span>Acceptance rate</span></article></div></section>`;
+  return `
+    <section class="wt-panel wt-consent">
+      <header class="wt-panel__head">
+        <div><h4>Consent health</h4><p>Aggregate choices only, never tied to a visitor. This decides how representative the journey data is.</p></div>
+        <strong class="wt-panel__figure">${rate}%<small>acceptance</small></strong>
+      </header>
+      <div class="wt-consent__meter"><i style="width:${rate}%"></i></div>
+      <div class="wt-consent__figures">
+        <article><strong>${wtFmt(answered)}</strong><span>Choices recorded</span></article>
+        <article><strong>${wtFmt(accepted)}</strong><span>Accepted</span></article>
+        <article><strong>${wtFmt(rejected)}</strong><span>Rejected</span></article>
+      </div>
+    </section>
+  `;
 }
 
-function renderWebsiteFunnel() {
-  const visitors = Number(websiteState?.uniqueVisitors || 0);
-  const quoteStarts = Number(websiteState?.quoteJourneys || 0);
-  const leads = Number(websiteState?.quotes || 0) + Number(websiteState?.forms || 0);
-  const leadRate = visitors ? Math.round((leads / visitors) * 100) : 0;
-  const steps = [["Visitors", visitors, "People who consented"], ["CTA clicks", Number(websiteState?.ctaClicks || 0), "Chose a commercial action"], ["Quote starts", quoteStarts, "Quote tool loaded or opened"], ["Leads", leads, "Quote or form sent"]];
-  return `<section class="website-funnel"><div class="website-section-heading"><div><span>Conversion funnel</span><h3>Where people fall away</h3></div><strong>${leadRate}% <small>visitor-to-lead</small></strong></div><div class="website-funnel__steps">${steps.map(([label, value, copy], index) => `<article class="website-funnel__step"><b>${String(index + 1).padStart(2, "0")}</b><strong>${value}</strong><span>${label}</span><small>${copy}</small></article>`).join("")}</div></section>`;
-}
-
-function renderWebsiteDecisionPanel() {
-  const visitors = Number(websiteState?.uniqueVisitors || 0);
-  const quoteStarts = Number(websiteState?.quoteJourneys || 0);
-  const quotes = Number(websiteState?.quotes || 0);
-  const forms = Number(websiteState?.forms || 0);
-  const contactClicks = Number(websiteState?.calls || 0);
-  const formStarts = Number(websiteState?.formStarts || 0);
-  const formErrors = Number(websiteState?.formErrors || 0);
+function wtDecision() {
+  const visitors = Number(websiteState.uniqueVisitors || 0);
+  const quoteStarts = Number(websiteState.quoteJourneys || 0);
+  const quotes = Number(websiteState.quotes || 0);
+  const forms = Number(websiteState.forms || 0);
+  const formStarts = Number(websiteState.formStarts || 0);
+  const formErrors = Number(websiteState.formErrors || 0);
+  const contactClicks = Number(websiteState.calls || 0);
   const enquiryRate = visitors ? Math.round(((quotes + forms) / visitors) * 100) : 0;
-  const quoteCompletion = quoteStarts ? Math.round((quotes / quoteStarts) * 100) : 0;
   const nextStep = visitors < 20
-    ? "This is still early data. Let it run until there are at least 20 consented visitors before using it to judge a channel or page."
+    ? "This is still early data. Let it run until there are at least 20 consented visitors before judging a channel or page."
     : quoteStarts === 0
       ? "Visitors are arriving but not opening the quote tool. Review the first-screen call to action and the routes sending traffic here."
       : formStarts > 0 && forms === 0
         ? "People are beginning the enquiry form but not sending it. Check the form fields and validation warnings before spending more on traffic."
-      : quotes === 0 && forms === 0
-        ? "Visitors are showing intent but not becoming leads. Check the quote journey, call button and form friction before spending more on traffic."
-        : "Compare channels below. Put more budget behind sources that create completed WindowCAD quotes or forms, not just visits.";
+        : quotes === 0 && forms === 0
+          ? "Visitors are showing intent but not becoming leads. Check the quote journey, call button and form friction before spending more on traffic."
+          : "Compare channels in Acquisition. Put budget behind sources that create completed WindowCAD quotes or forms, not just visits.";
+  const facts = [
+    visitors ? `Lead rate ${enquiryRate}%` : "",
+    quoteStarts ? `Quote completion ${Math.round((quotes / quoteStarts) * 100)}%` : "",
+    formStarts ? `Form completion ${Math.round((forms / formStarts) * 100)}%` : "",
+    formErrors ? `${wtFmt(formErrors)} validation warnings` : "",
+    contactClicks ? `${wtFmt(contactClicks)} contact taps` : ""
+  ].filter(Boolean);
   return `
-    <div class="website-note website-decision-note">
-      <strong>What this helps you decide</strong>
-      <span>${escapeHtml(nextStep)} ${visitors ? `Lead rate: ${enquiryRate}%.` : ""} ${quoteStarts ? `Quote completion: ${quoteCompletion}%.` : ""} ${formStarts ? `Form completion: ${Math.round((forms / formStarts) * 100)}%.` : ""} ${formErrors ? `Validation warnings: ${formErrors}.` : ""} ${contactClicks ? `Contact-button taps: ${contactClicks}.` : ""}</span>
-      ${renderWebsiteAcquisition()}
+    <section class="wt-panel wt-decision">
+      <h4>What this helps you decide</h4>
+      <p>${escapeHtml(nextStep)}</p>
+      ${facts.length ? `<div class="wt-chips">${facts.map((fact) => `<span class="wt-chip">${escapeHtml(fact)}</span>`).join("")}</div>` : ""}
+    </section>
+  `;
+}
+
+function wtRecentLeads() {
+  const recent = websiteState.recent || [];
+  return `
+    <section class="wt-panel">
+      <header class="wt-panel__head">
+        <div><h4>Recent lead outcomes</h4><p>Completed WindowCAD quotes and sent forms, with the first-touch source that earned them. Set the office outcome once the real lead is checked in AdminBase.</p></div>
+      </header>
+      ${recent.length ? `
+        <div class="table-wrap"><table class="table wt-table">
+          <thead><tr><th>When</th><th>Lead</th><th>Outcome</th><th>Source</th><th>Landing page</th><th>Product / value</th></tr></thead>
+          <tbody>${recent.map(renderWebsiteEvent).join("")}</tbody>
+        </table></div>
+      ` : `<p class="empty">No completed quotes or sent forms have been attributed yet. They appear here as soon as a consented visitor finishes a quote or form.</p>`}
+    </section>
+  `;
+}
+
+function wtAcquisition() {
+  const rows = websiteState.acquisition || [];
+  const products = websiteState.products || [];
+  const ctas = websiteState.topCtas || [];
+  return `
+    <section class="wt-panel">
+      <header class="wt-panel__head">
+        <div><h4>Channels</h4><p>First-touch source for consented journeys in the last 30 days. Tag ad URLs with UTM parameters or they appear as direct.</p></div>
+      </header>
+      ${rows.length ? `
+        <div class="table-wrap"><table class="table wt-table">
+          <thead><tr><th>Channel</th><th>Visitors</th><th>Quote starts</th><th>Quotes</th><th>Forms</th><th>Contact taps</th></tr></thead>
+          <tbody>${rows.map((row) => `
+            <tr>
+              <td><strong>${escapeHtml(row.channel || "Direct or unknown")}</strong></td>
+              <td>${wtFmt(row.visitors)}</td><td>${wtFmt(row.quote_starts)}</td>
+              <td>${wtFmt(row.quotes)}</td><td>${wtFmt(row.forms)}</td><td>${wtFmt(row.contact_clicks)}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table></div>
+      ` : `<p class="empty">No consented journeys recorded yet.</p>`}
+    </section>
+    <div class="wt-grid wt-grid--two">
+      <section class="wt-panel">
+        <header class="wt-panel__head"><div><h4>Quote products</h4><p>Which product collections people open and complete.</p></div></header>
+        ${products.length ? `
+          <div class="table-wrap"><table class="table wt-table">
+            <thead><tr><th>Product collection</th><th>Opens</th><th>Completions</th></tr></thead>
+            <tbody>${products.map((row) => `<tr><td><strong>${escapeHtml(row.product_collection)}</strong></td><td>${wtFmt(row.opens)}</td><td>${wtFmt(row.completions)}</td></tr>`).join("")}</tbody>
+          </table></div>
+        ` : `<p class="empty">No product-level quote activity yet.</p>`}
+      </section>
+      <section class="wt-panel">
+        <header class="wt-panel__head"><div><h4>Top calls to action</h4><p>The buttons and commercial links consented visitors actually use.</p></div></header>
+        ${ctas.length ? `
+          <ul class="wt-ranked">${ctas.map((row) => `<li><span>${escapeHtml(row.cta)}</span><b>${wtFmt(row.clicks)}</b></li>`).join("")}</ul>
+        ` : `<p class="empty">No CTA clicks recorded yet.</p>`}
+      </section>
     </div>
   `;
 }
 
-function renderWebsiteAcquisition() {
-  const rows = websiteState?.acquisition || [];
-  if (!rows.length) return "";
-  return `<div class="table-wrap website-acquisition"><table class="table website-events-table"><thead><tr><th>Channel</th><th>Visitors</th><th>Quote starts</th><th>Quotes</th><th>Forms</th><th>Contact taps</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.channel || "Direct or unknown")}</td><td>${escapeHtml(String(row.visitors || 0))}</td><td>${escapeHtml(String(row.quote_starts || 0))}</td><td>${escapeHtml(String(row.quotes || 0))}</td><td>${escapeHtml(String(row.forms || 0))}</td><td>${escapeHtml(String(row.contact_clicks || 0))}</td></tr>`).join("")}</tbody></table></div>`;
-}
-
-function renderWebsiteCustomers() {
-  const visitors = websiteState?.visitors || [];
+function wtPages() {
+  const consented = websiteState.topPages || [];
+  const anonymous = websiteState.statTopPages || [];
+  const devices = (websiteState.deviceSplit || []).filter((row) => row.device_type !== "server");
+  const deviceTotal = Math.max(1, devices.reduce((sum, row) => sum + Number(row.views || 0), 0));
   return `
-    <div class="website-recent">
-      <div class="panel-header compact"><div><h3>Customer database</h3><p class="panel-subtitle">Anonymous, consented visitors only. It shows repeat journeys and intent; personal details remain in AdminBase.</p></div></div>
-      ${websiteVisitorJourney ? renderWebsiteJourney() : ""}
-      ${visitors.length ? `<div class="table-wrap"><table class="table website-events-table"><thead><tr><th>Visitor</th><th>First touch</th><th>Last seen</th><th>Landing page</th><th>Journeys</th><th>Intent</th></tr></thead><tbody>${visitors.map(renderWebsiteVisitor).join("")}</tbody></table></div>` : `<p class="empty">No consented visitors have been recorded yet. Return visits in the same browser will be counted once after this update is live.</p>`}
+    <div class="wt-grid wt-grid--two">
+      <section class="wt-panel">
+        <header class="wt-panel__head"><div><h4>Top pages, consented</h4><p>Views and average engaged time from consented journeys.</p></div></header>
+        ${consented.length ? `
+          <div class="table-wrap"><table class="table wt-table">
+            <thead><tr><th>Page</th><th>Views</th><th>Avg time</th></tr></thead>
+            <tbody>${consented.map((row) => `<tr><td><code>${escapeHtml(row.page_path)}</code></td><td>${wtFmt(row.views)}</td><td>${wtSeconds(row.avg_seconds)}</td></tr>`).join("")}</tbody>
+          </table></div>
+        ` : `<p class="empty">No consented page views yet.</p>`}
+      </section>
+      <section class="wt-panel">
+        <header class="wt-panel__head"><div><h4>Top pages, anonymous</h4><p>Aggregate-only totals from visitors who did not accept optional cookies.</p></div></header>
+        ${anonymous.length ? `
+          <div class="table-wrap"><table class="table wt-table">
+            <thead><tr><th>Page</th><th>Views</th></tr></thead>
+            <tbody>${anonymous.map((row) => `<tr><td><code>${escapeHtml(row.page_path)}</code></td><td>${wtFmt(row.views)}</td></tr>`).join("")}</tbody>
+          </table></div>
+        ` : `<p class="empty">No anonymous statistics yet.</p>`}
+      </section>
     </div>
+    <section class="wt-panel">
+      <header class="wt-panel__head"><div><h4>Devices, anonymous traffic</h4><p>Broad device class from the aggregate statistics. Bot traffic is kept out of the other numbers.</p></div></header>
+      ${devices.length ? `
+        <div class="wt-devices">${devices.map((row) => `
+          <div class="wt-device">
+            <span>${escapeHtml(row.device_type)}</span>
+            <span class="wt-device__bar"><i style="width:${Math.max(2, Math.round((Number(row.views || 0) / deviceTotal) * 100))}%"></i></span>
+            <b>${wtFmt(row.views)}</b>
+          </div>
+        `).join("")}</div>
+      ` : `<p class="empty">No device data yet.</p>`}
+    </section>
   `;
 }
 
-function renderWebsiteChats() {
-  const chats = websiteState?.chats || [];
-  return `<div class="website-recent"><div class="panel-header compact"><div><h3>Legend chat quality assurance</h3><p class="panel-subtitle">Transcripts are available for 30 days. Accepted optional cookies link a chat to its anonymous journey; otherwise it remains chat-only.</p></div></div>${websiteChatTranscript ? renderWebsiteChatTranscript() : ''}${chats.length ? `<div class="table-wrap"><table class="table website-events-table"><thead><tr><th>When</th><th>Visitor</th><th>Started on</th><th>Messages</th><th></th></tr></thead><tbody>${chats.map((chat) => `<tr><td>${escapeHtml(formatDateTime(chat.last_message_at))}</td><td>${chat.visitor_id ? `<code>${escapeHtml(chat.visitor_id)}</code>` : '<span class="website-intent">Chat-only</span>'}</td><td><code>${escapeHtml(chat.page_path || '—')}</code></td><td>${escapeHtml(String(chat.messages || 0))}</td><td><button onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read chat</button></td></tr>`).join('')}</tbody></table></div>` : `<p class="empty">No Legend chats have been saved yet.</p>`}</div>`;
+function wtCustomers() {
+  const visitors = websiteState.visitors || [];
+  return `
+    ${websiteVisitorJourney ? renderWebsiteJourney() : ""}
+    <section class="wt-panel">
+      <header class="wt-panel__head">
+        <div><h4>Customer database</h4><p>Anonymous, consented browser visitors. Open one to read its full journey timeline; personal details stay in AdminBase.</p></div>
+      </header>
+      ${visitors.length ? `
+        <div class="table-wrap"><table class="table wt-table wt-table--visitors">
+          <thead><tr><th>Visitor</th><th>First touch</th><th>Last seen</th><th>Landing page</th><th>Journeys</th><th>Intent</th></tr></thead>
+          <tbody>${visitors.map(renderWebsiteVisitor).join("")}</tbody>
+        </table></div>
+      ` : `<p class="empty">No consented visitors recorded yet.</p>`}
+    </section>
+  `;
+}
+
+function wtChats() {
+  const chats = websiteState.chats || [];
+  return `
+    ${websiteChatTranscript ? renderWebsiteChatTranscript() : ""}
+    <section class="wt-panel">
+      <header class="wt-panel__head">
+        <div><h4>Legend chat quality assurance</h4><p>Transcripts are kept for 30 days. Accepted optional cookies link a chat to its anonymous journey; otherwise it is chat-only.</p></div>
+      </header>
+      ${chats.length ? `
+        <div class="table-wrap"><table class="table wt-table">
+          <thead><tr><th>When</th><th>Visitor</th><th>Started on</th><th>Messages</th><th></th></tr></thead>
+          <tbody>${chats.map((chat) => `
+            <tr>
+              <td>${escapeHtml(formatDateTime(chat.last_message_at))}</td>
+              <td>${chat.visitor_id ? `<code>${escapeHtml(chat.visitor_id)}</code>` : '<span class="website-intent">Chat-only</span>'}</td>
+              <td><code>${escapeHtml(chat.page_path || "—")}</code></td>
+              <td>${wtFmt(chat.messages)}</td>
+              <td><button class="wt-open-button" onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read chat</button></td>
+            </tr>
+          `).join("")}</tbody>
+        </table></div>
+      ` : `<p class="empty">No Legend chats have been saved yet.</p>`}
+    </section>
+  `;
 }
 
 function renderWebsiteChatTranscript() {
@@ -1966,7 +2230,7 @@ function renderWebsiteVisitor(item) {
 }
 
 function websiteEventLabel(event) {
-  return ({ visitor_seen: "Visitor returned", page_view: "Viewed page", page_engaged: "Time on page", link_click: "Clicked link", cta_click: "Clicked call to action", scroll_depth: "Reached page depth", quote_opened: "Opened quote tool", quote_iframe_loaded: "Loaded quote tool", quote_completed: "Completed WindowCAD quote", form_started: "Started form", form_validation_error: "Form validation warning", form_submitted: "Sent form", phone_click: "Tapped phone number", email_click: "Tapped email" })[event] || event;
+  return ({ visitor_seen: "Visitor returned", page_view: "Viewed page", page_engaged: "Time on page", link_click: "Clicked link", cta_click: "Clicked call to action", scroll_depth: "Reached page depth", quote_opened: "Opened quote tool", quote_iframe_loaded: "Loaded quote tool", quote_completed: "Completed WindowCAD quote", form_started: "Started form", form_validation_error: "Form validation warning", form_submitted: "Sent form", phone_click: "Tapped phone number", email_click: "Tapped email", chat_opened: "Opened Legend chat", chat_acknowledged: "Accepted chat terms", chat_message_sent: "Sent Legend message", chat_reply_received: "Received Legend reply" })[event] || event;
 }
 
 function renderWebsiteJourney() {
@@ -1975,7 +2239,7 @@ function renderWebsiteJourney() {
   const journeys = journey.journeys || [];
   const references = journeys.map((item) => `<code>${escapeHtml(item.journey_id)}</code>`).join("");
   const chats = journey.chats || [];
-  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Visitor journey</span><h3><code>${escapeHtml(journey.visitor.visitor_id)}</code></h3><p>${escapeHtml(String(journeys.length || 0))} tracked journey${journeys.length === 1 ? "" : "s"} · anonymous and consented</p><div class="website-journey-refs"><span>WindowCAD tracking reference${journeys.length === 1 ? "" : "s"}</span>${references || "<em>No WindowCAD journey yet</em>"}</div></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close <b>×</b></button></div>${chats.length ? `<div class="website-note"><strong>Legend chats</strong><span>${chats.map((chat) => `<button onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read ${escapeHtml(String(chat.messages))}-message chat</button>`).join(' ')}</span></div>` : ''}${events.length ? `<div class="website-timeline">${events.map(renderWebsiteJourneyEvent).join("")}</div>` : `<p class="empty">No detailed events yet. Page views and time on page begin collecting from this update onward.</p>`}</section>`;
+  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Visitor journey</span><h3><code>${escapeHtml(journey.visitor.visitor_id)}</code></h3><p>${escapeHtml(String(journeys.length || 0))} tracked journey${journeys.length === 1 ? "" : "s"} · anonymous and consented</p><div class="website-journey-refs"><span>WindowCAD tracking reference${journeys.length === 1 ? "" : "s"}</span>${references || "<em>No WindowCAD journey yet</em>"}</div></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close <b>×</b></button></div>${chats.length ? `<div class="website-note"><strong>Legend chats</strong><span>${chats.map((chat) => `<button onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read ${escapeHtml(String(chat.messages))}-message chat</button>`).join(' ')}</span></div>` : ''}${events.length ? `<div class="website-timeline">${events.map(renderWebsiteJourneyEvent).join("")}</div>` : `<p class="empty">No detailed events yet.</p>`}</section>`;
 }
 
 function renderWebsiteJourneyEvent(event) {
@@ -1994,7 +2258,8 @@ function renderWebsiteEvent(item) {
   return `
     <tr>
       <td>${escapeHtml(formatDateTime(item.occurred_at))}</td>
-      <td><strong>${escapeHtml(item.event_type === "quote_completed" ? "WindowCAD quote" : "Website form")}</strong><br><select class="website-outcome-select" aria-label="Lead status" onchange="window.dashboardWebsiteOutcome('${escapeHtml(item.journey_id)}', this.value)">${["new", "contacted", "appointment", "won", "lost"].map((status) => `<option value="${status}" ${status === (item.outcome_status || "new") ? "selected" : ""}>${status[0].toUpperCase() + status.slice(1)}</option>`).join("")}</select></td>
+      <td><strong>${escapeHtml(item.event_type === "quote_completed" ? "WindowCAD quote" : "Website form")}</strong></td>
+      <td><select class="website-outcome-select" aria-label="Lead status" onchange="window.dashboardWebsiteOutcome('${escapeHtml(item.journey_id)}', this.value)">${["new", "contacted", "appointment", "won", "lost"].map((status) => `<option value="${status}" ${status === (item.outcome_status || "new") ? "selected" : ""}>${status[0].toUpperCase() + status.slice(1)}</option>`).join("")}</select></td>
       <td>${escapeHtml(source)}</td>
       <td>${escapeHtml(item.landing_path || item.page_path || "—")}</td>
       <td>${escapeHtml([product, value].filter(Boolean).join(" · "))}</td>

@@ -36,8 +36,8 @@ If the live file still contains old code, Cloudflare has not deployed the new ve
 - Ideas board.
 - Roadmap tasks.
 - Website work board.
-- Tools tab for the Fenster Meta/social inbox bot.
-- Tools tab Website section for consented website journeys, WindowCAD quote outcomes, forms and contact intent.
+- Projects → Tools hub with two full-screen tools: the Fenster Meta Bot (social inbox) and the Website Tracker.
+- Website Tracker views: Overview (KPIs, daily traffic chart, funnel, consent health, recent lead outcomes), Acquisition (channels, quote products, top CTAs), Pages (consented and anonymous top pages, devices), Customers (visitor journeys) and Legend chats.
 - Auto-refresh-safe browser-session drafts for end-of-day reports, Facebook/Instagram replies and bot context, so the 60-second refresh cannot discard text being written.
 - Notes attached to records through the shared `notes` table.
 

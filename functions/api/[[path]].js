@@ -734,7 +734,10 @@ const WEBSITE_STAT_TYPES = new Set([
   "form_started",
   "form_submitted",
   "phone_click",
-  "email_click"
+  "email_click",
+  // Server-relayed total for WindowCAD completions that arrive without a
+  // consented FG2 reference. Aggregate count only; no journey is created.
+  "quote_completed"
 ]);
 
 function websiteCors(request) {
@@ -895,8 +898,9 @@ function websiteStatPath(value) {
 }
 
 function websiteStatDevice(value, userAgent = "") {
-  if (/bot|crawler|spider|headless|preview|lighthouse|pagespeed/i.test(userAgent)) return "bot";
   const requested = websiteText(value, 16).toLowerCase();
+  if (requested === "server") return "server";
+  if (/bot|crawler|spider|headless|preview|lighthouse|pagespeed/i.test(userAgent)) return "bot";
   if (["mobile", "tablet", "desktop"].includes(requested)) return requested;
   return /tablet|ipad/i.test(userAgent) ? "tablet" : /mobi|android/i.test(userAgent) ? "mobile" : "desktop";
 }
@@ -909,7 +913,10 @@ async function websiteStat({ request, env }) {
 
   const signed = Boolean(env.WEBSITE_INGEST_SECRET)
     && request.headers.get("X-Fenster-Website-Secret") === env.WEBSITE_INGEST_SECRET;
-  if (!signed && !isFensterWebsiteOrigin(origin)) {
+  // The WordPress server relay has no browser Origin; like the event endpoint,
+  // phase one accepts its declared Fenster host for this non-PII aggregate.
+  const serverOrigin = websiteText(body.origin, 300);
+  if (!signed && !isFensterWebsiteOrigin(origin) && !isFensterWebsiteOrigin(serverOrigin)) {
     return json({ error: "Untrusted website statistic" }, 403, websiteCorsHeaders(origin));
   }
 
@@ -1070,7 +1077,8 @@ async function fensterWebsiteState(env) {
         COALESCE(SUM(CASE WHEN event_type IN ('quote_opened', 'quote_iframe_loaded') THEN count ELSE 0 END), 0) AS quote_starts,
         COALESCE(SUM(CASE WHEN event_type = 'form_started' THEN count ELSE 0 END), 0) AS form_starts,
         COALESCE(SUM(CASE WHEN event_type = 'form_submitted' THEN count ELSE 0 END), 0) AS forms,
-        COALESCE(SUM(CASE WHEN event_type IN ('phone_click', 'email_click') THEN count ELSE 0 END), 0) AS contact_clicks
+        COALESCE(SUM(CASE WHEN event_type IN ('phone_click', 'email_click') THEN count ELSE 0 END), 0) AS contact_clicks,
+        COALESCE(SUM(CASE WHEN event_type = 'quote_completed' THEN count ELSE 0 END), 0) AS quote_completions
       FROM website_statistical_aggregate
       WHERE day >= ? AND device_type <> 'bot'
     `).bind(since.slice(0, 10)).first()
@@ -1080,6 +1088,59 @@ async function fensterWebsiteState(env) {
     SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
     WHERE occurred_at >= ? AND event_type IN ('quote_opened', 'quote_iframe_loaded')
   `).bind(since).first();
+
+  const sinceDay = since.slice(0, 10);
+  const [dailyEvents, dailyStat, consentDaily, topPages, statTopPages, deviceSplit, topCtas, formFields, products] = await Promise.all([
+    env.DB.prepare(`
+      SELECT substr(occurred_at, 1, 10) AS day,
+        SUM(CASE WHEN event_type = 'page_view' THEN 1 ELSE 0 END) AS page_views,
+        SUM(CASE WHEN event_type IN ('quote_opened', 'quote_iframe_loaded') THEN 1 ELSE 0 END) AS quote_starts,
+        SUM(CASE WHEN event_type IN ('quote_completed', 'form_submitted') THEN 1 ELSE 0 END) AS leads
+      FROM website_events WHERE occurred_at >= ? GROUP BY day ORDER BY day ASC
+    `).bind(since).all(),
+    env.DB.prepare(`
+      SELECT day,
+        SUM(CASE WHEN event_type = 'page_view' THEN count ELSE 0 END) AS page_views,
+        SUM(CASE WHEN event_type = 'quote_completed' THEN count ELSE 0 END) AS quote_completions
+      FROM website_statistical_aggregate WHERE day >= ? AND device_type <> 'bot' GROUP BY day ORDER BY day ASC
+    `).bind(sinceDay).all(),
+    env.DB.prepare("SELECT day, accepted, rejected FROM website_consent_daily WHERE day >= ? ORDER BY day ASC").bind(sinceDay).all(),
+    env.DB.prepare(`
+      SELECT page_path,
+        SUM(CASE WHEN event_type = 'page_view' THEN 1 ELSE 0 END) AS views,
+        CAST(ROUND(AVG(CASE WHEN event_type = 'page_engaged' AND page_duration_seconds > 0 THEN page_duration_seconds END)) AS INTEGER) AS avg_seconds
+      FROM website_events
+      WHERE occurred_at >= ? AND event_type IN ('page_view', 'page_engaged') AND page_path <> ''
+      GROUP BY page_path HAVING views > 0 ORDER BY views DESC LIMIT 12
+    `).bind(since).all(),
+    env.DB.prepare(`
+      SELECT page_path, SUM(count) AS views FROM website_statistical_aggregate
+      WHERE day >= ? AND event_type = 'page_view' AND device_type NOT IN ('bot', 'server')
+      GROUP BY page_path ORDER BY views DESC LIMIT 12
+    `).bind(sinceDay).all(),
+    env.DB.prepare(`
+      SELECT device_type, SUM(count) AS views FROM website_statistical_aggregate
+      WHERE day >= ? AND event_type = 'page_view' GROUP BY device_type ORDER BY views DESC
+    `).bind(sinceDay).all(),
+    env.DB.prepare(`
+      SELECT cta, COUNT(*) AS clicks FROM website_events
+      WHERE occurred_at >= ? AND event_type = 'cta_click' AND cta <> ''
+      GROUP BY cta ORDER BY clicks DESC LIMIT 10
+    `).bind(since).all(),
+    env.DB.prepare(`
+      SELECT cta AS field, COUNT(*) AS warnings FROM website_events
+      WHERE occurred_at >= ? AND event_type = 'form_validation_error' AND cta <> ''
+      GROUP BY cta ORDER BY warnings DESC LIMIT 8
+    `).bind(since).all(),
+    env.DB.prepare(`
+      SELECT product_collection,
+        SUM(CASE WHEN event_type = 'quote_opened' THEN 1 ELSE 0 END) AS opens,
+        SUM(CASE WHEN event_type = 'quote_completed' THEN 1 ELSE 0 END) AS completions
+      FROM website_events
+      WHERE occurred_at >= ? AND product_collection <> ''
+      GROUP BY product_collection ORDER BY completions DESC, opens DESC LIMIT 10
+    `).bind(since).all()
+  ]);
 
   return json({
     periodDays: 30,
@@ -1103,10 +1164,22 @@ async function fensterWebsiteState(env) {
       quoteStarts: Number(statistical?.quote_starts || 0),
       formStarts: Number(statistical?.form_starts || 0),
       forms: Number(statistical?.forms || 0),
-      contactClicks: Number(statistical?.contact_clicks || 0)
+      contactClicks: Number(statistical?.contact_clicks || 0),
+      quoteCompletions: Number(statistical?.quote_completions || 0)
     },
     consent: { shown: Number(consent?.shown || 0), accepted: Number(consent?.accepted || 0), rejected: Number(consent?.rejected || 0) },
-    outcomes: Object.fromEntries((outcomes.results || []).map((row) => [row.status, Number(row.count || 0)]))
+    outcomes: Object.fromEntries((outcomes.results || []).map((row) => [row.status, Number(row.count || 0)])),
+    series: {
+      events: dailyEvents.results || [],
+      statistical: dailyStat.results || [],
+      consent: consentDaily.results || []
+    },
+    topPages: topPages.results || [],
+    statTopPages: statTopPages.results || [],
+    deviceSplit: deviceSplit.results || [],
+    topCtas: topCtas.results || [],
+    formFields: formFields.results || [],
+    products: products.results || []
   });
 }
 

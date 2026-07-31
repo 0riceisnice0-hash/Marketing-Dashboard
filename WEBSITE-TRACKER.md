@@ -16,7 +16,7 @@ Names, emails, phone numbers, addresses, quote details and other customer-entere
 
 ## The data flow
 
-1. A visitor accepts optional cookies. The website creates an opaque browser visitor ID (`FGV-...`) and journey/quote ID (`FG2-...`).
+1. A visitor accepts analytics cookies. The website creates an opaque browser visitor ID (`FGV-...`) and session/journey ID (`FG2-...`). The visitor ID lasts up to 90 days; the journey rotates after 30 minutes without a tracked action.
 2. The website sends consented, non-PII activity to the dashboard: pages, active time, scroll depth and meaningful actions.
 3. When the quote tool opens, the site adds the `FG2-...` value to the WindowCAD URL's **tracking** parameter.
 4. WindowCAD saves that value in its separate **Tracking** field. Its office-owned **Reference** field must remain untouched.
@@ -28,22 +28,24 @@ The join is deliberately two IDs:
 | --- | --- | --- |
 | `FGV-...` | Anonymous, consented browser visitor | Customer database and visitor timelines |
 | `FG2-...` | Anonymous, consented journey/WindowCAD quote reference | Journey events and WindowCAD Tracking field |
+| `FGA-...` | Marketing-only attribution reference when analytics consent is off | WindowCAD and WordPress only; never creates a dashboard journey |
 | `rejected-cookies` | A quote was created after optional-cookie rejection | WindowCAD only; never joined to a dashboard journey |
 | `cookie-consent-not-accepted` | A quote was created before a cookie choice | WindowCAD only; never joined to a dashboard journey |
 
-An `FG2` is not expected to equal the visitor's `FGV`: it is the reference that lets the dashboard say “this visitor completed this WindowCAD quote.” One visitor can have multiple journeys and more than one quote submission.
+An `FG2` is not expected to equal the visitor's `FGV`: it is the reference that lets the dashboard say “this visitor completed this WindowCAD quote.” One visitor can have multiple 30-minute journeys and more than one quote submission.
 
 ## Consent, identity and privacy
 
-- Accepted optional cookies are required for a persistent `FGV`, an `FG2`, browsing events, attribution and WindowCAD joining.
+- Analytics consent is required for a persistent `FGV`, an `FG2`, browsing events and dashboard journey joining.
+- Marketing consent independently controls Google/Meta tags, click identifiers, enhanced/offline matching and the marketing-only `FGA` reference. GCLID/BRAID values and Google `_gcl_*` storage must be cleared when marketing consent is withdrawn.
 - A returning consenting browser normally keeps the same `FGV` for 90 days. Incognito, cleared site storage, a new browser/device or an expired ID becomes a different visitor.
 - Rejected/no-choice visitors can still submit a WindowCAD quote or website form to the office, but they do **not** get a consented tracker visitor, journey or individual browsing record. Separate aggregate-only statistical totals may include their page views and high-level actions.
-- Consent Health is aggregate-only: choices recorded, accepted, rejected and acceptance rate. It is never tied to a visitor, page, source, device or journey.
-- Banner impressions are intentionally not counted. Crawlers and pre-consent sessions made that figure misleading.
+- Consent Health is aggregate-only and distinguishes `Accept all`, `Analytics only`, `Marketing only` and `Necessary only`. It is never tied to a visitor, page, source, device or journey.
+- Banner impressions are counted separately from choices so abandonment and implementation failures remain visible.
 
 ### Non-consented statistical traffic
 
-The dashboard also keeps a separate `website_statistical_aggregate` table for visitors who have not accepted optional cookies. This is aggregate-only measurement for website health: hourly page views, engagement, quote starts, form starts/sends and phone/email intent, grouped by page, broad device class and referrer host. It never receives `FGV`/`FG2`, creates a visitor or journey, or joins a lead to a person.
+The dashboard keeps a separate `website_statistical_aggregate_v2` table for visitors who have not accepted analytics cookies. This is aggregate-only measurement for website health: hourly page views, engagement, deliberate quote opens, form starts/sends and phone/email intent, grouped by environment, page, broad device class and referrer host. It never receives `FGV`/`FG2`, creates a visitor or journey, or joins a lead to a person.
 
 The individual browser request is reduced into an hourly bucket at ingestion. Do not add visitor IDs, IP-derived keys, fingerprints, ad click IDs, customer values or per-person timelines to this table. It must remain solely for improving the website. Consent is still required for individual journey tracking, ad measurement, remarketing or cross-site/cross-device attribution.
 
@@ -56,7 +58,7 @@ The individual browser request is reduced into an hourly bucket at ingestion. Do
 | Unique visitors | Distinct consented `FGV` values in the selected period | All people who saw the website |
 | Journeys | Consented visits/sessions recorded by the tracker | Distinct people |
 | CTA clicks | Commercial links/buttons selected | A lead or a sale |
-| Quote starts | Quote tool opened or loaded | A quote submitted |
+| Quote starts | A visitor deliberately opened or expanded the quote tool | An iframe exposure or a quote submitted |
 | Forms started | A website form received meaningful interaction | A form sent |
 | Forms sent | A website form was submitted | A confirmed appointment or sale |
 | WindowCAD quotes | A callback confirmed WindowCAD received a completed quote | A unique person; one visitor may submit several |
@@ -70,7 +72,7 @@ Time on a page is based on visible/engaged browsing. It is useful for comparing 
 
 ### Acquisition, source and landing pages
 
-First touch records the source, campaign and landing page that brought a consented visitor in. This is first-touch attribution, not proof that the last interaction caused the lead.
+First touch records the source, campaign and landing page that began a consented 30-minute journey. A returning campaign starts a new journey while the 90-day visitor record remains the same. This is session first-touch attribution, not proof that the last interaction caused the lead.
 
 For Meta, keep ad destination URLs tagged, for example:
 
@@ -94,14 +96,23 @@ The timeline does not contain typed form values, WindowCAD product configuration
 
 ### Lead outcomes
 
-For a consented completed WindowCAD quote or form, staff can set a non-PII business outcome: `new`, `contacted`, `appointment`, `won` or `lost`. This is the bridge between website attribution and the office result. Apply it only after checking the actual lead in AdminBase/WindowCAD, and do not add personal details in dashboard notes.
+For a consented completed WindowCAD quote or form, staff can set a non-PII business outcome: `new`, `contacted`, `qualified`, `appointment`, `won` or `lost`. The WordPress Enquiries screen also stores the won value and relays the outcome to the dashboard. Qualified and won outcomes enter the protected Google Ads offline feed when a consented click ID or enhanced-conversion hash is available. Apply outcomes only after checking the actual lead in AdminBase/WindowCAD, and do not add personal details in dashboard notes.
+
+## Data integrity and environments
+
+- Browser traffic is classified from the real request `Origin`; JSON cannot claim to be production.
+- Server relays require the shared `WEBSITE_INGEST_SECRET`.
+- Production reporting reads only `environment = production`; test traffic remains available in storage but cannot inflate live KPIs.
+- Every identified event has an `event_id`. Replayed events are acknowledged without being counted twice.
+- Server aggregate lead events use deterministic receipt IDs, so the daily WordPress reconciliation can safely retry the last seven days.
+- Automatic `quote_iframe_loaded` remains an exposure/technical event and is never counted as a quote start.
 
 ## Legend chat quality assurance
 
 Legend is live. The composer is immediately available; using it accepts the displayed chat terms, which disclose AI processing and 30-day QA retention.
 
 - The dashboard stores the actual visitor and assistant transcript for 30 days so quality can be reviewed.
-- With accepted optional cookies, the chat is linked to its `FGV`, `FG2` and page and appears in both the visitor journey and **Legend chats**.
+- With analytics cookies accepted, the chat is linked to its `FGV`, `FG2` and page and appears in both the visitor journey and **Legend chats**.
 - After rejected/no optional cookies, the transcript is chat-only: it has no visitor ID, journey, browsing events or attribution, but is still visible in **Legend chats** for QA.
 - Legend chats are not proof of a lead. Look for a later quote/form/contact action or an office outcome before treating a chat as commercial value.
 - Dashboard access is authenticated, but transcripts may contain personal information despite the warning. Do not copy them to unrelated systems.
@@ -110,16 +121,16 @@ Legend is live. The composer is immediately available; using it accepts the disp
 
 The website can measure a `tel:` link click, which is useful as dial intent. It cannot tell whether Focus Group answered the call, who called, duration, recording outcome, appointment or sale. When Focus Group provides an API, webhook or scheduled call-detail export, send non-PII call outcomes into the dashboard and use a shared lead/call reference where available. Until then, keep “phone clicks” labelled as intent only.
 
-Other useful future additions, subject to consent and data minimisation, are office lead outcomes, booked consultations, confirmed appointments, sales values/bands and authorised call outcomes. Do not add raw PII, ad click IDs or full CRM records to browser tracking.
+Office lead outcomes, booked consultations, qualified leads and confirmed sales values are now supported. The remaining useful addition is an authorised Focus Group call outcome feed, subject to a stable shared reference, consent and data minimisation. Do not add raw PII, ad click IDs or full CRM records to browser tracking.
 
 ## Troubleshooting checklist
 
 | Symptom | Check first |
 | --- | --- |
-| WindowCAD completion is missing | Confirm the quote URL uses `tracking`, the value starts `FG2-`, and the WordPress callback has run. WindowCAD's capture is invisible and URL-driven: the app stores the `tracking=` URL value under its Tracking property independent of the visible form field list (verified end-to-end July 2026). A submission with no tracking value means the session did not start from a site URL — office-entered projects and direct or re-opened WindowCAD links are the normal causes. **Known failure (July 2026): AdminBase renewed its TLS certificate onto the Sectigo R46 root, WordPress' bundled CA file predated it, and relays failed with cURL error 60** — leads stayed in WordPress with `_fenster_adminbase_sent = 0`; the theme now uses the host system trust store for AdminBase requests and sends the dashboard `quote_completed` before the AdminBase attempt. The Overview tab shows an amber alert counting completions that arrive without a tracking reference (relayed into the aggregate statistics as `quote_completed`). |
+| WindowCAD completion is missing | Confirm the quote URL uses `tracking`, the value starts `FG2-` (analytics) or `FGA-` (marketing-only), and the WordPress callback has run. WindowCAD's capture is invisible and URL-driven: the app stores the `tracking=` URL value under its Tracking property independent of the visible form field list (verified end-to-end July 2026). A submission with no tracking value means the session did not start from a site URL — office-entered projects and direct or re-opened WindowCAD links are the normal causes. **Known failure (July 2026): AdminBase renewed its TLS certificate onto the Sectigo R46 root, WordPress' bundled CA file predated it, and relays failed with cURL error 60** — leads stayed in WordPress with `_fenster_adminbase_sent = 0`; the theme now uses the host system trust store for AdminBase requests and sends the dashboard `quote_completed` before the AdminBase attempt. The Overview tab shows an amber alert counting completions that arrive without a tracking reference (relayed into the aggregate statistics as `quote_completed`). |
 | A WindowCAD row has `FG2` but no customer match | Search the Customer database/timeline for that `FG2`; it should appear as a completed quote event against an `FGV` visitor. If it does not, inspect the relay rather than creating office test quotes. |
 | Meta is not visible as a source | Confirm the live ad URL carries the UTM parameters and test a fresh, consented browser journey. |
-| Consent Health is zero | Check that a fresh visitor makes an accept/reject choice, then confirm the dashboard API/state response and deployed frontend. Banner impressions are not a valid comparison. |
+| Consent Health is zero | Check that a fresh visitor makes a granular choice, then confirm the dashboard API/state response and deployed frontend. Compare choices with banner impressions to spot abandonment. |
 | Legend Chats is empty | Send a real message, not merely open the drawer; then check the site-to-dashboard chat endpoint and dashboard deployment. Rejected-cookie chats should be chat-only, not Customer database rows. |
 | Counts look larger than expected | Check whether the metric counts actions/journeys rather than people. Multiple starts or WindowCAD submissions from one visitor are legitimate. |
 

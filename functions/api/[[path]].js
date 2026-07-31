@@ -29,6 +29,7 @@ export async function onRequest(context) {
     if (route === "website/consent" && context.request.method === "POST") return websiteConsent(context);
     if (route === "website/stat" && context.request.method === "OPTIONS") return websiteCors(context.request);
     if (route === "website/stat" && context.request.method === "POST") return websiteStat(context);
+    if (route === "website/outcome-ingest" && context.request.method === "POST") return websiteOutcomeIngest(context);
     if (route === "login" && context.request.method === "POST") return login(context);
     if (route === "logout") return logout(context);
 
@@ -764,6 +765,26 @@ function isFensterWebsiteOrigin(origin) {
   }
 }
 
+function websiteEnvironment(origin) {
+  try {
+    const host = new URL(origin).hostname.toLowerCase();
+    if (host === "test.fensterglazing.com") return "test";
+    if (["fensterglazing.com", "www.fensterglazing.com"].includes(host)) return "production";
+  } catch {}
+  return "";
+}
+
+function signedWebsiteRequest(request, env) {
+  return Boolean(env.WEBSITE_INGEST_SECRET)
+    && request.headers.get("X-Fenster-Website-Secret") === env.WEBSITE_INGEST_SECRET;
+}
+
+function websiteRequestEnvironment(request, body, signed) {
+  const browserEnvironment = websiteEnvironment(request.headers.get("Origin") || "");
+  if (browserEnvironment) return browserEnvironment;
+  return signed ? websiteEnvironment(websiteText(body.origin, 300)) : "";
+}
+
 function websiteText(value, limit = 180) {
   return String(value || "").trim().slice(0, limit);
 }
@@ -791,25 +812,32 @@ function websiteDuration(value) {
 async function websiteEvent({ request, env }) {
   const origin = request.headers.get("Origin") || "";
   const body = await request.json().catch(() => ({}));
-  const signed = Boolean(env.WEBSITE_INGEST_SECRET) && request.headers.get("X-Fenster-Website-Secret") === env.WEBSITE_INGEST_SECRET;
-  // The WordPress callback is server-to-server, so it has no browser Origin.
-  // Phase one deliberately also accepts its declared Fenster host; this is
-  // non-PII telemetry only and the owner has accepted this trade-off. Retain
-  // the secret path so HMAC/strict server validation can be enabled later.
-  const serverOrigin = websiteText(body.origin, 300);
-  if (!signed && !isFensterWebsiteOrigin(origin) && !isFensterWebsiteOrigin(serverOrigin)) {
+  const signed = signedWebsiteRequest(request, env);
+  const environment = websiteRequestEnvironment(request, body, signed);
+  if (!environment) {
     return json({ error: "Untrusted website event" }, 403);
   }
 
   const event = websiteText(body.event, 64);
   if (!WEBSITE_EVENT_TYPES.has(event)) return json({ error: "Unsupported website event" }, 400, websiteCorsHeaders(origin));
+  if (["form_submitted", "quote_completed"].includes(event) && !signed) {
+    return json({ error: "Completed lead events require a signed server relay" }, 403, websiteCorsHeaders(origin));
+  }
 
   const journeyId = websiteJourneyId(body.journey_id, event === "quote_completed" ? `UNATTRIBUTED-${crypto.randomUUID()}` : "");
   if (!journeyId) return json({ error: "A valid journey reference is required" }, 400, websiteCorsHeaders(origin));
+  const existingJourney = await env.DB.prepare("SELECT visitor_id, environment FROM website_journeys WHERE journey_id = ?").bind(journeyId).first();
+  if (existingJourney?.environment && !["legacy", environment].includes(existingJourney.environment)) {
+    return json({ error: "Journey belongs to another environment" }, 409, websiteCorsHeaders(origin));
+  }
+
+  const requestedEventId = websiteText(body.event_id, 120);
+  const eventId = /^[A-Za-z0-9-]{8,120}$/.test(requestedEventId) ? requestedEventId : crypto.randomUUID();
+  const duplicate = await env.DB.prepare("SELECT 1 FROM website_events WHERE id = ?").bind(eventId).first();
+  if (duplicate) return json({ ok: true, journey_id: journeyId, duplicate: true }, 200, websiteCorsHeaders(origin));
 
   let visitorId = websiteVisitorId(body.visitor_id);
   if (!visitorId) {
-    const existingJourney = await env.DB.prepare("SELECT visitor_id FROM website_journeys WHERE journey_id = ?").bind(journeyId).first();
     visitorId = websiteVisitorId(existingJourney?.visitor_id);
   }
 
@@ -817,7 +845,13 @@ async function websiteEvent({ request, env }) {
     journeyId,
     visitorId,
     event,
-    occurredAt: new Date().toISOString(),
+    occurredAt: (() => {
+      const requested = signed ? Date.parse(websiteText(body.occurred_at, 40)) : NaN;
+      const now = Date.now();
+      return Number.isFinite(requested) && requested <= now + 300000 && requested >= now - (2 * 365 * 86400000)
+        ? new Date(requested).toISOString()
+        : new Date(now).toISOString();
+    })(),
     pagePath: websiteText(body.page_path, 500),
     landingPath: websiteText(body.landing_path, 500),
     source: websiteText(body.source, 120),
@@ -837,18 +871,20 @@ async function websiteEvent({ request, env }) {
 
   if (data.visitorId) {
     await env.DB.prepare(`
-      INSERT INTO website_visitors (visitor_id, first_seen_at, last_seen_at, first_landing_path, first_source, first_medium, first_campaign, first_content, first_term, first_referrer_host)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(visitor_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+      INSERT INTO website_visitors (visitor_id, first_seen_at, last_seen_at, first_landing_path, first_source, first_medium, first_campaign, first_content, first_term, first_referrer_host, environment)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(visitor_id) DO UPDATE SET
+        last_seen_at = excluded.last_seen_at,
+        environment = CASE WHEN website_visitors.environment = 'legacy' THEN excluded.environment ELSE website_visitors.environment END
     `).bind(
       data.visitorId, data.occurredAt, data.occurredAt, data.landingPath, data.source, data.medium,
-      data.campaign, data.content, data.term, data.referrerHost
+      data.campaign, data.content, data.term, data.referrerHost, environment
     ).run();
   }
 
   await env.DB.prepare(`
-    INSERT INTO website_journeys (journey_id, visitor_id, first_event_at, last_event_at, landing_path, source, medium, campaign, content, term, referrer_host)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO website_journeys (journey_id, visitor_id, first_event_at, last_event_at, landing_path, source, medium, campaign, content, term, referrer_host, environment)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(journey_id) DO UPDATE SET
       last_event_at = excluded.last_event_at,
       visitor_id = CASE WHEN website_journeys.visitor_id = '' THEN excluded.visitor_id ELSE website_journeys.visitor_id END,
@@ -858,18 +894,20 @@ async function websiteEvent({ request, env }) {
       campaign = CASE WHEN website_journeys.campaign = '' THEN excluded.campaign ELSE website_journeys.campaign END,
       content = CASE WHEN website_journeys.content = '' THEN excluded.content ELSE website_journeys.content END,
       term = CASE WHEN website_journeys.term = '' THEN excluded.term ELSE website_journeys.term END,
-      referrer_host = CASE WHEN website_journeys.referrer_host = '' THEN excluded.referrer_host ELSE website_journeys.referrer_host END
+      referrer_host = CASE WHEN website_journeys.referrer_host = '' THEN excluded.referrer_host ELSE website_journeys.referrer_host END,
+      environment = CASE WHEN website_journeys.environment = 'legacy' THEN excluded.environment ELSE website_journeys.environment END
   `).bind(
     data.journeyId, data.visitorId, data.occurredAt, data.occurredAt, data.landingPath, data.source, data.medium,
-    data.campaign, data.content, data.term, data.referrerHost
+    data.campaign, data.content, data.term, data.referrerHost, environment
   ).run();
 
   await env.DB.prepare(`
-    INSERT INTO website_events (id, journey_id, event_type, occurred_at, page_path, cta, link_target, page_duration_seconds, product_collection, price_amount, price_currency, event_value)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO website_events (id, journey_id, event_type, occurred_at, page_path, cta, link_target, page_duration_seconds, product_collection, price_amount, price_currency, event_value, environment)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
-    crypto.randomUUID(), data.journeyId, data.event, data.occurredAt, data.pagePath, data.cta,
-    data.linkTarget, data.pageDurationSeconds, data.productCollection, data.priceAmount, data.priceCurrency, data.eventValue
+    eventId, data.journeyId, data.event, data.occurredAt, data.pagePath, data.cta,
+    data.linkTarget, data.pageDurationSeconds, data.productCollection, data.priceAmount, data.priceCurrency, data.eventValue,
+    environment
   ).run();
 
   return json({ ok: true, journey_id: data.journeyId }, 201, websiteCorsHeaders(origin));
@@ -877,17 +915,24 @@ async function websiteEvent({ request, env }) {
 
 async function websiteConsent({ request, env }) {
   const origin = request.headers.get("Origin") || "";
-  if (!isFensterWebsiteOrigin(origin)) return json({ error: "Untrusted consent event" }, 403);
+  const environment = websiteEnvironment(origin);
+  if (!environment) return json({ error: "Untrusted consent event" }, 403);
   const body = await request.json().catch(() => ({}));
   const choice = websiteText(body.choice, 24);
-  const column = { shown: "banner_shown", accepted: "accepted", rejected: "rejected" }[choice];
+  const column = {
+    shown: "banner_shown",
+    necessary_only: "necessary_only",
+    analytics_only: "analytics_only",
+    marketing_only: "marketing_only",
+    all: "all_optional"
+  }[choice];
   if (!column) return json({ error: "Unsupported consent choice" }, 400, websiteCorsHeaders(origin));
 
   const day = new Date().toISOString().slice(0, 10);
   await env.DB.prepare(`
-    INSERT INTO website_consent_daily (day, ${column}) VALUES (?, 1)
-    ON CONFLICT(day) DO UPDATE SET ${column} = ${column} + 1
-  `).bind(day).run();
+    INSERT INTO website_consent_daily_v2 (environment, day, ${column}) VALUES (?, ?, 1)
+    ON CONFLICT(environment, day) DO UPDATE SET ${column} = ${column} + 1
+  `).bind(environment, day).run();
 
   return json({ ok: true }, 201, websiteCorsHeaders(origin));
 }
@@ -911,12 +956,9 @@ async function websiteStat({ request, env }) {
   let body = {};
   try { body = JSON.parse(bodyText || "{}"); } catch {}
 
-  const signed = Boolean(env.WEBSITE_INGEST_SECRET)
-    && request.headers.get("X-Fenster-Website-Secret") === env.WEBSITE_INGEST_SECRET;
-  // The WordPress server relay has no browser Origin; like the event endpoint,
-  // phase one accepts its declared Fenster host for this non-PII aggregate.
-  const serverOrigin = websiteText(body.origin, 300);
-  if (!signed && !isFensterWebsiteOrigin(origin) && !isFensterWebsiteOrigin(serverOrigin)) {
+  const signed = signedWebsiteRequest(request, env);
+  const environment = websiteRequestEnvironment(request, body, signed);
+  if (!environment) {
     return json({ error: "Untrusted website statistic" }, 403, websiteCorsHeaders(origin));
   }
 
@@ -924,21 +966,40 @@ async function websiteStat({ request, env }) {
   if (!WEBSITE_STAT_TYPES.has(event)) {
     return json({ error: "Unsupported website statistic" }, 400, websiteCorsHeaders(origin));
   }
+  if (["form_submitted", "quote_completed"].includes(event) && !signed) {
+    return json({ error: "Completed lead statistics require a signed server relay" }, 403, websiteCorsHeaders(origin));
+  }
 
-  const now = new Date();
+  const requestedAt = signed ? Date.parse(websiteText(body.occurred_at, 40)) : NaN;
+  const currentTime = Date.now();
+  const now = new Date(
+    Number.isFinite(requestedAt) && requestedAt <= currentTime + 300000 && requestedAt >= currentTime - (2 * 365 * 86400000)
+      ? requestedAt
+      : currentTime
+  );
   const day = now.toISOString().slice(0, 10);
   const hourUtc = now.getUTCHours();
   const pagePath = websiteStatPath(body.page_path);
   const referrerHost = websiteText(body.referrer_host, 180).toLowerCase().replace(/[^a-z0-9.-]/g, "");
   const deviceType = websiteStatDevice(body.device_type, request.headers.get("User-Agent") || "");
+  const eventId = signed ? websiteText(body.event_id, 120) : "";
+  if (eventId && /^[A-Za-z0-9-]{8,120}$/.test(eventId)) {
+    const receipt = await env.DB.prepare(`
+      INSERT OR IGNORE INTO website_stat_receipts (event_id, environment, received_at)
+      VALUES (?, ?, ?)
+    `).bind(eventId, environment, new Date().toISOString()).run();
+    if (!Number(receipt.meta?.changes || 0)) {
+      return json({ ok: true, duplicate: true }, 200, websiteCorsHeaders(origin));
+    }
+  }
 
   await env.DB.prepare(`
-    INSERT INTO website_statistical_aggregate
-      (day, hour_utc, event_type, page_path, referrer_host, device_type, count)
-    VALUES (?, ?, ?, ?, ?, ?, 1)
-    ON CONFLICT(day, hour_utc, event_type, page_path, referrer_host, device_type)
-    DO UPDATE SET count = website_statistical_aggregate.count + 1
-  `).bind(day, hourUtc, event, pagePath, referrerHost, deviceType).run();
+    INSERT INTO website_statistical_aggregate_v2
+      (environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+    ON CONFLICT(environment, day, hour_utc, event_type, page_path, referrer_host, device_type)
+    DO UPDATE SET count = website_statistical_aggregate_v2.count + 1
+  `).bind(environment, day, hourUtc, event, pagePath, referrerHost, deviceType).run();
 
   return json({ ok: true }, 201, websiteCorsHeaders(origin));
 }
@@ -950,7 +1011,8 @@ function websiteChatId(value) {
 
 async function websiteChat({ request, env }) {
   const origin = request.headers.get("Origin") || "";
-  if (!isFensterWebsiteOrigin(origin)) return json({ error: "Untrusted chat transcript" }, 403);
+  const environment = websiteEnvironment(origin);
+  if (!environment) return json({ error: "Untrusted chat transcript" }, 403);
   const body = await request.json().catch(() => ({}));
   const conversationId = websiteChatId(body.conversation_id);
   const journeyId = websiteJourneyId(body.journey_id);
@@ -965,24 +1027,61 @@ async function websiteChat({ request, env }) {
   const expiresAt = new Date(now.getTime() + (30 * 86400000)).toISOString();
   await env.DB.prepare("DELETE FROM website_chat_messages WHERE expires_at <= ?").bind(now.toISOString()).run();
   await env.DB.prepare(`
-    INSERT OR IGNORE INTO website_chat_messages (id, conversation_id, journey_id, visitor_id, page_path, role, body, created_at, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(messageId, conversationId, journeyId, visitorId, websiteText(body.page_path, 500), role, text, now.toISOString(), expiresAt).run();
+    INSERT OR IGNORE INTO website_chat_messages (id, conversation_id, journey_id, visitor_id, page_path, role, body, created_at, expires_at, environment)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(messageId, conversationId, journeyId, visitorId, websiteText(body.page_path, 500), role, text, now.toISOString(), expiresAt, environment).run();
   return json({ ok: true, conversation_id: conversationId }, 201, websiteCorsHeaders(origin));
+}
+
+async function websiteOutcomeIngest({ request, env }) {
+  const body = await request.json().catch(() => ({}));
+  const signed = signedWebsiteRequest(request, env);
+  const environment = websiteRequestEnvironment(request, body, signed);
+  if (!signed || !environment) return json({ error: "Untrusted website outcome" }, 403);
+
+  const journeyId = websiteJourneyId(body.journey_id);
+  const status = websiteText(body.status, 24).toLowerCase();
+  if (!journeyId || !["new", "contacted", "qualified", "appointment", "won", "lost"].includes(status)) {
+    return json({ error: "A valid journey and sales outcome are required" }, 400);
+  }
+
+  const exists = await env.DB.prepare(`
+    SELECT 1 FROM website_events
+    WHERE journey_id = ? AND environment = ? AND event_type IN ('quote_completed', 'form_submitted')
+    LIMIT 1
+  `).bind(journeyId, environment).first();
+  if (!exists) return json({ error: "That journey has no completed website lead" }, 404);
+
+  const value = websiteNumber(body.value);
+  const currency = websiteText(body.currency, 8).toUpperCase() || "GBP";
+  const occurredAt = websiteText(body.occurred_at, 40) || new Date().toISOString();
+  await env.DB.prepare(`
+    INSERT INTO website_lead_outcomes (journey_id, status, updated_at, value, currency, occurred_at, environment)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(journey_id) DO UPDATE SET
+      status = excluded.status,
+      updated_at = excluded.updated_at,
+      value = excluded.value,
+      currency = excluded.currency,
+      occurred_at = excluded.occurred_at,
+      environment = excluded.environment
+  `).bind(journeyId, status, new Date().toISOString(), value, currency, occurredAt, environment).run();
+
+  return json({ ok: true, journey_id: journeyId, status }, 201);
 }
 
 async function fensterWebsiteOutcome(env, request) {
   const body = await request.json().catch(() => ({}));
   const journeyId = websiteJourneyId(body.journey_id);
   const status = websiteText(body.status, 24).toLowerCase();
-  if (!journeyId || !["new", "contacted", "appointment", "won", "lost"].includes(status)) {
+  if (!journeyId || !["new", "contacted", "qualified", "appointment", "won", "lost"].includes(status)) {
     return json({ error: "A valid journey and sales outcome are required" }, 400);
   }
-  const exists = await env.DB.prepare("SELECT 1 FROM website_events WHERE journey_id = ? AND event_type IN ('quote_completed', 'form_submitted') LIMIT 1").bind(journeyId).first();
+  const exists = await env.DB.prepare("SELECT 1 FROM website_events WHERE journey_id = ? AND environment = 'production' AND event_type IN ('quote_completed', 'form_submitted') LIMIT 1").bind(journeyId).first();
   if (!exists) return json({ error: "That journey has no completed website lead" }, 404);
   await env.DB.prepare(`
-    INSERT INTO website_lead_outcomes (journey_id, status, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(journey_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at
+    INSERT INTO website_lead_outcomes (journey_id, status, updated_at, environment) VALUES (?, ?, ?, 'production')
+    ON CONFLICT(journey_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at, environment = 'production'
   `).bind(journeyId, status, new Date().toISOString()).run();
   return json({ ok: true, journey_id: journeyId, status });
 }
@@ -992,17 +1091,17 @@ async function fensterWebsiteVisitor(env, value) {
   if (!visitorId) return json({ error: "Invalid visitor" }, 400);
 
   const [visitor, journeys, events, chats] = await Promise.all([
-    env.DB.prepare("SELECT * FROM website_visitors WHERE visitor_id = ?").bind(visitorId).first(),
-    env.DB.prepare("SELECT journey_id, first_event_at, last_event_at, landing_path, source, medium, campaign FROM website_journeys WHERE visitor_id = ? ORDER BY first_event_at ASC").bind(visitorId).all(),
+    env.DB.prepare("SELECT * FROM website_visitors WHERE visitor_id = ? AND environment = 'production'").bind(visitorId).first(),
+    env.DB.prepare("SELECT journey_id, first_event_at, last_event_at, landing_path, source, medium, campaign FROM website_journeys WHERE visitor_id = ? AND environment = 'production' ORDER BY first_event_at ASC").bind(visitorId).all(),
     env.DB.prepare(`
       SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.link_target, e.page_duration_seconds, e.product_collection, e.price_amount, e.price_currency, e.event_value, e.journey_id
       FROM website_events e
       INNER JOIN website_journeys j ON j.journey_id = e.journey_id
-      WHERE j.visitor_id = ?
+      WHERE j.visitor_id = ? AND e.environment = 'production' AND j.environment = 'production'
       ORDER BY e.occurred_at ASC
       LIMIT 500
     `).bind(visitorId).all()
-    ,env.DB.prepare(`SELECT conversation_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE visitor_id = ? AND expires_at > ? GROUP BY conversation_id, journey_id, page_path ORDER BY last_message_at DESC`).bind(visitorId, new Date().toISOString()).all()
+    ,env.DB.prepare(`SELECT conversation_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE visitor_id = ? AND expires_at > ? AND environment = 'production' GROUP BY conversation_id, journey_id, page_path ORDER BY last_message_at DESC`).bind(visitorId, new Date().toISOString()).all()
   ]);
 
   if (!visitor) return json({ error: "Visitor not found" }, 404);
@@ -1012,7 +1111,7 @@ async function fensterWebsiteVisitor(env, value) {
 async function fensterWebsiteChat(env, value) {
   const conversationId = websiteChatId(value);
   if (!conversationId) return json({ error: "Invalid chat" }, 400);
-  const rows = await env.DB.prepare(`SELECT conversation_id, journey_id, visitor_id, page_path, role, body, created_at FROM website_chat_messages WHERE conversation_id = ? AND expires_at > ? ORDER BY created_at ASC`).bind(conversationId, new Date().toISOString()).all();
+  const rows = await env.DB.prepare(`SELECT conversation_id, journey_id, visitor_id, page_path, role, body, created_at FROM website_chat_messages WHERE conversation_id = ? AND expires_at > ? AND environment = 'production' ORDER BY created_at ASC`).bind(conversationId, new Date().toISOString()).all();
   if (!(rows.results || []).length) return json({ error: "Chat not found or expired" }, 404);
   return json({ conversation_id: conversationId, messages: rows.results });
 }
@@ -1020,37 +1119,37 @@ async function fensterWebsiteChat(env, value) {
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
   const [events, journeys, uniqueVisitors, recent, visitors, chats, chatCount, outcomes, consent, acquisition, statistical] = await Promise.all([
-    env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? GROUP BY event_type").bind(since).all(),
-    env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ?").bind(since).first(),
-    env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ?").bind(since).first(),
+    env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? AND environment = 'production' GROUP BY event_type").bind(since).all(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ? AND environment = 'production'").bind(since).first(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ? AND environment = 'production'").bind(since).first(),
     env.DB.prepare(`
       SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.product_collection, e.price_amount, e.price_currency,
         j.journey_id, j.landing_path, j.source, j.medium, j.campaign, COALESCE(o.status, 'new') AS outcome_status
       FROM website_events e
       LEFT JOIN website_journeys j ON j.journey_id = e.journey_id
-      LEFT JOIN website_lead_outcomes o ON o.journey_id = e.journey_id
-      WHERE e.event_type IN ('form_submitted', 'quote_completed')
+      LEFT JOIN website_lead_outcomes o ON o.journey_id = e.journey_id AND o.environment = 'production'
+      WHERE e.event_type IN ('form_submitted', 'quote_completed') AND e.environment = 'production'
       ORDER BY e.occurred_at DESC LIMIT 16
     `).all(),
     env.DB.prepare(`
       SELECT v.visitor_id, v.first_seen_at, v.last_seen_at, v.first_landing_path, v.first_source, v.first_medium, v.first_campaign,
         COUNT(DISTINCT j.journey_id) AS journeys,
-        SUM(CASE WHEN e.event_type IN ('quote_opened', 'quote_iframe_loaded') THEN 1 ELSE 0 END) AS quote_starts,
+        SUM(CASE WHEN e.event_type = 'quote_opened' THEN 1 ELSE 0 END) AS quote_starts,
         SUM(CASE WHEN e.event_type = 'quote_completed' THEN 1 ELSE 0 END) AS quotes,
         SUM(CASE WHEN e.event_type = 'form_submitted' THEN 1 ELSE 0 END) AS forms,
         SUM(CASE WHEN e.event_type IN ('phone_click', 'email_click') THEN 1 ELSE 0 END) AS contact_clicks,
-        (SELECT COUNT(DISTINCT c.conversation_id) FROM website_chat_messages c WHERE c.visitor_id = v.visitor_id AND c.expires_at > ?) AS legend_chats
+        (SELECT COUNT(DISTINCT c.conversation_id) FROM website_chat_messages c WHERE c.visitor_id = v.visitor_id AND c.expires_at > ? AND c.environment = 'production') AS legend_chats
       FROM website_visitors v
-      LEFT JOIN website_journeys j ON j.visitor_id = v.visitor_id
-      LEFT JOIN website_events e ON e.journey_id = j.journey_id
-      WHERE v.last_seen_at >= ?
+      LEFT JOIN website_journeys j ON j.visitor_id = v.visitor_id AND j.environment = 'production'
+      LEFT JOIN website_events e ON e.journey_id = j.journey_id AND e.environment = 'production'
+      WHERE v.last_seen_at >= ? AND v.environment = 'production'
       GROUP BY v.visitor_id
       ORDER BY v.last_seen_at DESC LIMIT 100
     `).bind(new Date().toISOString(), since).all()
-    ,env.DB.prepare(`SELECT conversation_id, visitor_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE expires_at > ? GROUP BY conversation_id, visitor_id, journey_id, page_path ORDER BY last_message_at DESC LIMIT 50`).bind(new Date().toISOString()).all()
-    ,env.DB.prepare("SELECT COUNT(DISTINCT conversation_id) AS count FROM website_chat_messages WHERE expires_at > ?").bind(new Date().toISOString()).first()
-    ,env.DB.prepare("SELECT status, COUNT(*) AS count FROM website_lead_outcomes GROUP BY status").all()
-    ,env.DB.prepare("SELECT COALESCE(SUM(banner_shown), 0) AS shown, COALESCE(SUM(accepted), 0) AS accepted, COALESCE(SUM(rejected), 0) AS rejected FROM website_consent_daily WHERE day >= ?").bind(since.slice(0, 10)).first()
+    ,env.DB.prepare(`SELECT conversation_id, visitor_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE expires_at > ? AND environment = 'production' GROUP BY conversation_id, visitor_id, journey_id, page_path ORDER BY last_message_at DESC LIMIT 50`).bind(new Date().toISOString()).all()
+    ,env.DB.prepare("SELECT COUNT(DISTINCT conversation_id) AS count FROM website_chat_messages WHERE expires_at > ? AND environment = 'production'").bind(new Date().toISOString()).first()
+    ,env.DB.prepare("SELECT status, COUNT(*) AS count FROM website_lead_outcomes WHERE environment = 'production' GROUP BY status").all()
+    ,env.DB.prepare("SELECT COALESCE(SUM(banner_shown), 0) AS shown, COALESCE(SUM(necessary_only), 0) AS necessary_only, COALESCE(SUM(analytics_only), 0) AS analytics_only, COALESCE(SUM(marketing_only), 0) AS marketing_only, COALESCE(SUM(all_optional), 0) AS all_optional FROM website_consent_daily_v2 WHERE day >= ? AND environment = 'production'").bind(since.slice(0, 10)).first()
     ,env.DB.prepare(`
       SELECT
         CASE
@@ -1060,13 +1159,13 @@ async function fensterWebsiteState(env) {
         END AS channel,
         COUNT(DISTINCT NULLIF(j.visitor_id, '')) AS visitors,
         COUNT(DISTINCT j.journey_id) AS journeys,
-        COUNT(DISTINCT CASE WHEN e.event_type IN ('quote_opened', 'quote_iframe_loaded') THEN j.journey_id END) AS quote_starts,
+        COUNT(DISTINCT CASE WHEN e.event_type = 'quote_opened' THEN j.journey_id END) AS quote_starts,
         SUM(CASE WHEN e.event_type = 'quote_completed' THEN 1 ELSE 0 END) AS quotes,
         SUM(CASE WHEN e.event_type = 'form_submitted' THEN 1 ELSE 0 END) AS forms,
         SUM(CASE WHEN e.event_type IN ('phone_click', 'email_click') THEN 1 ELSE 0 END) AS contact_clicks
       FROM website_journeys j
-      LEFT JOIN website_events e ON e.journey_id = j.journey_id
-      WHERE j.last_event_at >= ?
+      LEFT JOIN website_events e ON e.journey_id = j.journey_id AND e.environment = 'production'
+      WHERE j.last_event_at >= ? AND j.environment = 'production'
       GROUP BY channel
       ORDER BY quotes DESC, forms DESC, quote_starts DESC, visitors DESC
       LIMIT 12
@@ -1074,19 +1173,19 @@ async function fensterWebsiteState(env) {
     ,env.DB.prepare(`
       SELECT
         COALESCE(SUM(CASE WHEN event_type = 'page_view' THEN count ELSE 0 END), 0) AS page_views,
-        COALESCE(SUM(CASE WHEN event_type IN ('quote_opened', 'quote_iframe_loaded') THEN count ELSE 0 END), 0) AS quote_starts,
+        COALESCE(SUM(CASE WHEN event_type = 'quote_opened' THEN count ELSE 0 END), 0) AS quote_starts,
         COALESCE(SUM(CASE WHEN event_type = 'form_started' THEN count ELSE 0 END), 0) AS form_starts,
         COALESCE(SUM(CASE WHEN event_type = 'form_submitted' THEN count ELSE 0 END), 0) AS forms,
         COALESCE(SUM(CASE WHEN event_type IN ('phone_click', 'email_click') THEN count ELSE 0 END), 0) AS contact_clicks,
         COALESCE(SUM(CASE WHEN event_type = 'quote_completed' THEN count ELSE 0 END), 0) AS quote_completions
-      FROM website_statistical_aggregate
-      WHERE day >= ? AND device_type <> 'bot'
+      FROM website_statistical_aggregate_v2
+      WHERE day >= ? AND device_type <> 'bot' AND environment = 'production'
     `).bind(since.slice(0, 10)).first()
   ]);
   const totals = Object.fromEntries((events.results || []).map((row) => [row.event_type, Number(row.count || 0)]));
   const quoteJourneys = await env.DB.prepare(`
     SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
-    WHERE occurred_at >= ? AND event_type IN ('quote_opened', 'quote_iframe_loaded')
+    WHERE occurred_at >= ? AND event_type = 'quote_opened' AND environment = 'production'
   `).bind(since).first();
 
   const sinceDay = since.slice(0, 10);
@@ -1094,42 +1193,42 @@ async function fensterWebsiteState(env) {
     env.DB.prepare(`
       SELECT substr(occurred_at, 1, 10) AS day,
         SUM(CASE WHEN event_type = 'page_view' THEN 1 ELSE 0 END) AS page_views,
-        SUM(CASE WHEN event_type IN ('quote_opened', 'quote_iframe_loaded') THEN 1 ELSE 0 END) AS quote_starts,
+        SUM(CASE WHEN event_type = 'quote_opened' THEN 1 ELSE 0 END) AS quote_starts,
         SUM(CASE WHEN event_type IN ('quote_completed', 'form_submitted') THEN 1 ELSE 0 END) AS leads
-      FROM website_events WHERE occurred_at >= ? GROUP BY day ORDER BY day ASC
+      FROM website_events WHERE occurred_at >= ? AND environment = 'production' GROUP BY day ORDER BY day ASC
     `).bind(since).all(),
     env.DB.prepare(`
       SELECT day,
         SUM(CASE WHEN event_type = 'page_view' THEN count ELSE 0 END) AS page_views,
         SUM(CASE WHEN event_type = 'quote_completed' THEN count ELSE 0 END) AS quote_completions
-      FROM website_statistical_aggregate WHERE day >= ? AND device_type <> 'bot' GROUP BY day ORDER BY day ASC
+      FROM website_statistical_aggregate_v2 WHERE day >= ? AND device_type <> 'bot' AND environment = 'production' GROUP BY day ORDER BY day ASC
     `).bind(sinceDay).all(),
-    env.DB.prepare("SELECT day, accepted, rejected FROM website_consent_daily WHERE day >= ? ORDER BY day ASC").bind(sinceDay).all(),
+    env.DB.prepare("SELECT day, necessary_only, analytics_only, marketing_only, all_optional FROM website_consent_daily_v2 WHERE day >= ? AND environment = 'production' ORDER BY day ASC").bind(sinceDay).all(),
     env.DB.prepare(`
       SELECT page_path,
         SUM(CASE WHEN event_type = 'page_view' THEN 1 ELSE 0 END) AS views,
         CAST(ROUND(AVG(CASE WHEN event_type = 'page_engaged' AND page_duration_seconds > 0 THEN page_duration_seconds END)) AS INTEGER) AS avg_seconds
       FROM website_events
-      WHERE occurred_at >= ? AND event_type IN ('page_view', 'page_engaged') AND page_path <> ''
+      WHERE occurred_at >= ? AND environment = 'production' AND event_type IN ('page_view', 'page_engaged') AND page_path <> ''
       GROUP BY page_path HAVING views > 0 ORDER BY views DESC LIMIT 12
     `).bind(since).all(),
     env.DB.prepare(`
-      SELECT page_path, SUM(count) AS views FROM website_statistical_aggregate
-      WHERE day >= ? AND event_type = 'page_view' AND device_type NOT IN ('bot', 'server')
+      SELECT page_path, SUM(count) AS views FROM website_statistical_aggregate_v2
+      WHERE day >= ? AND environment = 'production' AND event_type = 'page_view' AND device_type NOT IN ('bot', 'server')
       GROUP BY page_path ORDER BY views DESC LIMIT 12
     `).bind(sinceDay).all(),
     env.DB.prepare(`
-      SELECT device_type, SUM(count) AS views FROM website_statistical_aggregate
-      WHERE day >= ? AND event_type = 'page_view' GROUP BY device_type ORDER BY views DESC
+      SELECT device_type, SUM(count) AS views FROM website_statistical_aggregate_v2
+      WHERE day >= ? AND environment = 'production' AND event_type = 'page_view' GROUP BY device_type ORDER BY views DESC
     `).bind(sinceDay).all(),
     env.DB.prepare(`
       SELECT cta, COUNT(*) AS clicks FROM website_events
-      WHERE occurred_at >= ? AND event_type = 'cta_click' AND cta <> ''
+      WHERE occurred_at >= ? AND environment = 'production' AND event_type = 'cta_click' AND cta <> ''
       GROUP BY cta ORDER BY clicks DESC LIMIT 10
     `).bind(since).all(),
     env.DB.prepare(`
       SELECT cta AS field, COUNT(*) AS warnings FROM website_events
-      WHERE occurred_at >= ? AND event_type = 'form_validation_error' AND cta <> ''
+      WHERE occurred_at >= ? AND environment = 'production' AND event_type = 'form_validation_error' AND cta <> ''
       GROUP BY cta ORDER BY warnings DESC LIMIT 8
     `).bind(since).all(),
     env.DB.prepare(`
@@ -1137,7 +1236,7 @@ async function fensterWebsiteState(env) {
         SUM(CASE WHEN event_type = 'quote_opened' THEN 1 ELSE 0 END) AS opens,
         SUM(CASE WHEN event_type = 'quote_completed' THEN 1 ELSE 0 END) AS completions
       FROM website_events
-      WHERE occurred_at >= ? AND product_collection <> ''
+      WHERE occurred_at >= ? AND environment = 'production' AND product_collection <> ''
       GROUP BY product_collection ORDER BY completions DESC, opens DESC LIMIT 10
     `).bind(since).all()
   ]);
@@ -1167,7 +1266,13 @@ async function fensterWebsiteState(env) {
       contactClicks: Number(statistical?.contact_clicks || 0),
       quoteCompletions: Number(statistical?.quote_completions || 0)
     },
-    consent: { shown: Number(consent?.shown || 0), accepted: Number(consent?.accepted || 0), rejected: Number(consent?.rejected || 0) },
+    consent: {
+      shown: Number(consent?.shown || 0),
+      necessaryOnly: Number(consent?.necessary_only || 0),
+      analyticsOnly: Number(consent?.analytics_only || 0),
+      marketingOnly: Number(consent?.marketing_only || 0),
+      allOptional: Number(consent?.all_optional || 0)
+    },
     outcomes: Object.fromEntries((outcomes.results || []).map((row) => [row.status, Number(row.count || 0)])),
     series: {
       events: dailyEvents.results || [],

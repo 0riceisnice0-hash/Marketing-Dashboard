@@ -225,32 +225,36 @@ Read [WEBSITE-TRACKER.md](WEBSITE-TRACKER.md) before interpreting the Website
 Tracker or changing its consent, WindowCAD or chat behaviour. It is the
 operator-facing source of truth for data meanings and limits.
 
-The Fenster theme creates an opaque `FG2-…` reference for a quote journey and
-appends it to WindowCAD URLs only after optional-cookie acceptance, using the configured `tracking` parameter.
+The Fenster theme creates an opaque `FG2-…` reference for an analytics-consented
+30-minute quote journey and appends it to WindowCAD URLs using the configured
+`tracking` parameter. A marketing-only visitor instead receives an `FGA-…`
+attribution reference, which never creates a dashboard visitor or journey.
 WindowCAD must map that URL parameter into its separate **Tracking** customer
 field. The office-owned **Reference** field is intentionally not used. When
 WindowCAD posts to WordPress, WordPress relays a
 non-PII `quote_completed` event to this dashboard and D1 joins it to the first
-website event with the same reference. The relay must run only for a valid `FG2-…` Tracking value.
+website event with the same reference. Only a valid `FG2-…` value can join a
+dashboard journey; `FGA-…` remains private marketing attribution.
 
-The theme also creates opaque `FGV-…` visitor values after acceptance. `FG2-…`
-and `FGV-…` persist for 90 days in the same consenting browser. The tracker
+The theme also creates opaque `FGV-…` visitor values after analytics consent.
+`FGV-…` persists for 90 days in the same consenting browser, while `FG2-…`
+rotates after 30 minutes of inactivity. The tracker
 stores first touch, page views, time on page, 25/50/75/90% scroll milestones,
 meaningful link/CTA clicks, quote/form/contact intent, form starts and the first
 validation warning (field name only), plus completed WindowCAD quotes. The
 Website Tracker UI provides an acquisition funnel, consent health, an anonymous
 customer list, a clickable chronological journey timeline and a manual non-PII
-lead status (`new`, `contacted`, `appointment`, `won` or `lost`) for a completed
+lead status (`new`, `contacted`, `qualified`, `appointment`, `won` or `lost`) for a completed
 `FG2-...` lead. This is an attribution status, not a CRM record: one journey can
 legitimately produce more than one WindowCAD submission until a unique WindowCAD
 project ID is included in the callback.
 
 If optional cookies are rejected, WindowCAD receives `rejected-cookies`; before
-a choice it receives `cookie-consent-not-accepted`. Those values still reach
-the office/CRM but must never create or join a dashboard journey. Consent health
-uses daily aggregate-only `accepted` and `rejected` counters, with no visitor
-ID, URL, referrer, device or personal data. Banner impressions are deliberately
-not counted because anonymous crawler/session traffic makes them unreliable.
+a choice it receives `cookie-consent-not-accepted`, and the quote iframe cannot
+load. Those values must never create or join a dashboard journey. Consent health
+uses environment-separated daily aggregate-only counters for banner shown,
+necessary-only, analytics-only, marketing-only and all cookies, with no visitor
+ID, URL, referrer, device or personal data.
 
 The separate statistical aggregate endpoint may count non-consented page views and
 high-level interaction totals for website improvement. It stores only hourly
@@ -258,15 +262,20 @@ buckets by page, broad device class and referrer host. It must not be used for
 individual tracking, advertising measurement, remarketing, cross-site attribution
 or lead joins.
 
-Required configuration (never commit either secret):
+Required configuration (never commit secrets):
 
-- Optional hardening: Cloudflare Pages `WEBSITE_INGEST_SECRET` and matching WordPress/Bedrock `FENSTER_WEBSITE_DASHBOARD_SECRET`. The first release also accepts a server relay which declares a trusted Fenster host, by the owner's explicit phase-one decision; replace that fallback with strict HMAC validation before treating the endpoint as hostile-facing.
+- Cloudflare Pages `WEBSITE_INGEST_SECRET` and matching WordPress/Bedrock
+  `FENSTER_WEBSITE_DASHBOARD_SECRET` (or the protected WordPress option). Server
+  relays and `/api/website/outcome-ingest` are rejected without this signature.
 - Optional WordPress overrides: `FENSTER_WEBSITE_DASHBOARD_URL` and `FENSTER_WINDOWCAD_REFERENCE_PARAMETER` (default: `tracking`)
 
 The browser endpoint accepts only `fensterglazing.com`, `www.fensterglazing.com`
-and `test.fensterglazing.com` origins. Browser events only run after the site
-cookie choice is accepted. Names, emails, phones, addresses and raw WindowCAD
-fields remain in WordPress/AdminBase and are never sent to this dashboard.
+and `test.fensterglazing.com` origins. It derives `production` or `test` from the
+real browser Origin; production reporting filters out test and legacy rows.
+Identified browser events only run after analytics consent, carry an idempotent
+event ID, and retry without PII. Names, emails, phones, addresses, ad click IDs
+and raw WindowCAD fields remain in WordPress/AdminBase and are never sent to
+this dashboard.
 
 Focus Group phone integration is intentionally pending API, webhook or scheduled
 call-detail export access. Website `phone_click` means dial intent only; it is

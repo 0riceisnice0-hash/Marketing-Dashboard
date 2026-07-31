@@ -22,7 +22,15 @@ const tables = {
     { key: "ai_prompt_context", value: "Never say warranties or guarantees are transferable." }
   ],
   fenster_bot_queue: [],
-  website_statistical_aggregate: []
+  website_statistical_aggregate: [],
+  website_statistical_aggregate_v2: [],
+  website_stat_receipts: [],
+  website_consent_daily_v2: [],
+  website_visitors: [],
+  website_journeys: [],
+  website_events: [],
+  website_chat_messages: [],
+  website_lead_outcomes: []
 };
 
 let forcedUuid = 1;
@@ -35,6 +43,7 @@ const env = {
   PASSWORD_ADAM: "test-password",
   PASSWORD_NICK: "test-password",
   META_PAGE_ACCESS_TOKEN: "test-meta-token",
+  WEBSITE_INGEST_SECRET: "website-ingest-secret",
   LEAD_EMAIL_WEBHOOK_URL: "https://lead-email.test/send",
   LEAD_EMAIL_WEBHOOK_SECRET: "lead-secret",
   DB: {
@@ -108,8 +117,112 @@ const anonymousStat = await call("/api/website/stat", {
   body: JSON.stringify({ event: "page_view", page_path: "/", device_type: "desktop", referrer_host: "www.google.com", origin: "https://www.fensterglazing.com" })
 });
 assert(anonymousStat.status === 201, "anonymous statistical event should be accepted");
-assert(tables.website_statistical_aggregate.length > 0, "anonymous statistical event should be stored in the aggregate table");
+assert(tables.website_statistical_aggregate_v2.length > 0, "anonymous statistical event should be stored in the environment-separated aggregate table");
 assert(!tables.website_visitors || tables.website_visitors.length === 0, "anonymous statistical event should not create a visitor record");
+
+const spoofedServerStat = await call("/api/website/stat", {
+  method: "POST",
+  headers: { "Content-Type": "text/plain;charset=UTF-8" },
+  body: JSON.stringify({ event: "quote_completed", page_path: "/online-quote/", origin: "https://www.fensterglazing.com" })
+});
+assert(spoofedServerStat.status === 403, "an unsigned server event must not be trusted from a claimed JSON origin");
+
+const signedServerStatBody = {
+  event: "quote_completed",
+  event_id: "wp-windowcad-smoke-1",
+  page_path: "/online-quote/",
+  origin: "https://www.fensterglazing.com"
+};
+const signedServerStat = await call("/api/website/stat", {
+  method: "POST",
+  headers: { "X-Fenster-Website-Secret": env.WEBSITE_INGEST_SECRET },
+  body: JSON.stringify(signedServerStatBody)
+});
+assert(signedServerStat.status === 201, "a signed aggregate lead should be accepted");
+const duplicateServerStat = await call("/api/website/stat", {
+  method: "POST",
+  headers: { "X-Fenster-Website-Secret": env.WEBSITE_INGEST_SECRET },
+  body: JSON.stringify(signedServerStatBody)
+});
+assert(duplicateServerStat.status === 200, "a repeated aggregate receipt should be acknowledged without recounting");
+
+const unsignedBrowserLeadStat = await call("/api/website/stat", {
+  method: "POST",
+  headers: { Origin: "https://www.fensterglazing.com", "Content-Type": "text/plain;charset=UTF-8" },
+  body: JSON.stringify({ event: "form_submitted", page_path: "/contact/" })
+});
+assert(unsignedBrowserLeadStat.status === 403, "browser traffic must not create completed aggregate leads");
+
+const testStat = await call("/api/website/stat", {
+  method: "POST",
+  headers: { Origin: "https://test.fensterglazing.com", "Content-Type": "text/plain;charset=UTF-8" },
+  body: JSON.stringify({ event: "page_view", page_path: "/test-only/", device_type: "desktop" })
+});
+assert(testStat.status === 201, "test-site statistical event should be accepted");
+assert(tables.website_statistical_aggregate_v2.some((item) => item.environment === "test"), "test traffic must be labelled separately");
+
+const consentAll = await call("/api/website/consent", {
+  method: "POST",
+  headers: { Origin: "https://www.fensterglazing.com", "Content-Type": "text/plain;charset=UTF-8" },
+  body: JSON.stringify({ choice: "all" })
+});
+assert(consentAll.status === 201, "granular consent choice should be accepted");
+assert(tables.website_consent_daily_v2.some((item) => item.environment === "production" && item.all_optional === 1), "granular consent should retain its category");
+
+const websiteEventBody = {
+  event_id: "event-website-smoke-1",
+  event: "page_view",
+  journey_id: "FG2-SMOKEJOURNEY123",
+  visitor_id: "FGV-SMOKEVISITOR123",
+  page_path: "/",
+  landing_path: "/",
+  source: "google",
+  medium: "cpc"
+};
+const websiteEvent = await call("/api/website/event", {
+  method: "POST",
+  headers: { Origin: "https://www.fensterglazing.com", "Content-Type": "text/plain;charset=UTF-8" },
+  body: JSON.stringify(websiteEventBody)
+});
+assert(websiteEvent.status === 201, "consented website event should be accepted");
+const duplicateWebsiteEvent = await call("/api/website/event", {
+  method: "POST",
+  headers: { Origin: "https://www.fensterglazing.com", "Content-Type": "text/plain;charset=UTF-8" },
+  body: JSON.stringify(websiteEventBody)
+});
+assert(duplicateWebsiteEvent.status === 200, "replayed event IDs should be acknowledged without recounting");
+assert(tables.website_events.filter((item) => item.id === websiteEventBody.event_id).length === 1, "replayed event IDs must be idempotent");
+
+const unsignedBrowserLead = await call("/api/website/event", {
+  method: "POST",
+  headers: { Origin: "https://www.fensterglazing.com", "Content-Type": "text/plain;charset=UTF-8" },
+  body: JSON.stringify({ ...websiteEventBody, event_id: "event-website-smoke-lead", event: "form_submitted" })
+});
+assert(unsignedBrowserLead.status === 403, "browser traffic must not create an identified completed lead");
+
+const signedLead = await call("/api/website/event", {
+  method: "POST",
+  headers: { "X-Fenster-Website-Secret": env.WEBSITE_INGEST_SECRET },
+  body: JSON.stringify({
+    ...websiteEventBody,
+    event_id: "wp-form-smoke-1",
+    event: "form_submitted",
+    origin: "https://www.fensterglazing.com"
+  })
+});
+assert(signedLead.status === 201, "a signed identified lead should be accepted");
+const signedOutcome = await call("/api/website/outcome-ingest", {
+  method: "POST",
+  headers: { "X-Fenster-Website-Secret": env.WEBSITE_INGEST_SECRET },
+  body: JSON.stringify({
+    journey_id: websiteEventBody.journey_id,
+    status: "qualified",
+    value: 0,
+    currency: "GBP",
+    origin: "https://www.fensterglazing.com"
+  })
+});
+assert(signedOutcome.status === 201, "a signed outcome should attach to a completed lead");
 
 const ticket = await call("/api/records/tickets", {
   method: "POST",
@@ -414,6 +527,10 @@ function queryFirst({ sql, values }) {
   const table = tableFrom(sql);
   if (!sql.includes("WHERE")) return tables[table][0] || null;
   if (table === "fenster_settings") return tables[table].find((item) => item.key === values[0]) || null;
+  if (table === "website_events" && sql.includes("journey_id = ?")) {
+    return tables[table].find((item) => item.journey_id === values[0]
+      && (!sql.includes("event_type IN") || ["quote_completed", "form_submitted"].includes(item.event_type))) || null;
+  }
   return tables[table].find((item) => item.id === values[0]) || null;
 }
 
@@ -423,11 +540,26 @@ function run({ sql, values }) {
   if (sql.startsWith("INSERT")) {
     const columns = sql.match(/\(([^)]+)\)/)[1].split(",").map((value) => value.trim());
     const item = columns.includes("id") ? {} : { id: nextId++ };
+    const valueTokens = sql.match(/VALUES\s*\(([^)]+)\)/i)?.[1].split(",").map((value) => value.trim()) || [];
+    let boundIndex = 0;
     columns.forEach((column, index) => {
-      item[column] = values[index];
+      const token = valueTokens[index] || "?";
+      if (token === "?") {
+        item[column] = values[boundIndex++];
+      } else if (/^-?\d+(?:\.\d+)?$/.test(token)) {
+        item[column] = Number(token);
+      } else {
+        item[column] = token.replace(/^'(.*)'$/, "$1");
+      }
     });
+    if (sql.startsWith("INSERT OR IGNORE") && tables[table].some((row) => (
+      (item.event_id && row.event_id === item.event_id)
+      || (item.id && row.id === item.id)
+    ))) {
+      return { meta: { changes: 0 } };
+    }
     tables[table].push(item);
-    return { meta: { last_row_id: item.id } };
+    return { meta: { last_row_id: item.id, changes: 1 } };
   }
   if (sql.startsWith("UPDATE")) {
     const item = table === "fenster_settings"
@@ -463,7 +595,7 @@ function run({ sql, values }) {
 }
 
 function tableFrom(sql) {
-  const match = sql.match(/(?:FROM|INTO|UPDATE)\s+([a-z_]+)/);
+  const match = sql.match(/(?:FROM|INTO|UPDATE)\s+([a-z0-9_]+)/);
   if (!match) throw new Error(`Could not detect table from SQL: ${sql}`);
   return match[1];
 }

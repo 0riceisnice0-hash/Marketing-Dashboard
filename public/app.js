@@ -1901,7 +1901,7 @@ function wtOverview() {
   const kpis = [
     [s.uniqueVisitors, "Consented visitors", "last 30 days"],
     [s.journeys, "Journeys", "visits recorded"],
-    [s.quoteJourneys, "Quote starts", "tool opened or loaded"],
+    [s.quoteJourneys, "Quote starts", "deliberate opens"],
     [s.quotes, "WindowCAD quotes", "consented completions"],
     [s.forms, "Forms sent", `${wtFmt(s.formStarts)} started`],
     [s.calls, "Phone / email clicks", "contact intent only"],
@@ -1986,7 +1986,7 @@ function wtFunnel() {
   const steps = [
     ["Consented visitors", Number(websiteState.uniqueVisitors || 0), "accepted optional cookies"],
     ["CTA clicks", Number(websiteState.ctaClicks || 0), "chose a commercial action"],
-    ["Quote starts", Number(websiteState.quoteJourneys || 0), "quote tool loaded or opened"],
+    ["Quote starts", Number(websiteState.quoteJourneys || 0), "deliberately opened"],
     ["Leads", Number(websiteState.quotes || 0) + Number(websiteState.forms || 0), "quote completed or form sent"]
   ];
   const max = Math.max(1, ...steps.map(([, value]) => value));
@@ -2013,21 +2013,28 @@ function wtFunnel() {
 
 function wtConsent() {
   const consent = websiteState.consent || {};
-  const accepted = Number(consent.accepted || 0);
-  const rejected = Number(consent.rejected || 0);
-  const answered = accepted + rejected;
-  const rate = answered ? Math.round((accepted / answered) * 100) : 0;
+  const necessaryOnly = Number(consent.necessaryOnly || 0);
+  const analyticsOnly = Number(consent.analyticsOnly || 0);
+  const marketingOnly = Number(consent.marketingOnly || 0);
+  const allOptional = Number(consent.allOptional || 0);
+  const answered = necessaryOnly + analyticsOnly + marketingOnly + allOptional;
+  const analyticsAccepted = analyticsOnly + allOptional;
+  const marketingAccepted = marketingOnly + allOptional;
+  const rate = answered ? Math.round((analyticsAccepted / answered) * 100) : 0;
   return `
     <section class="wt-panel wt-consent">
       <header class="wt-panel__head">
         <div><h4>Consent health</h4><p>Aggregate choices only, never tied to a visitor. This decides how representative the journey data is.</p></div>
-        <strong class="wt-panel__figure">${rate}%<small>acceptance</small></strong>
+        <strong class="wt-panel__figure">${rate}%<small>analytics consent</small></strong>
       </header>
       <div class="wt-consent__meter"><i style="width:${rate}%"></i></div>
       <div class="wt-consent__figures">
         <article><strong>${wtFmt(answered)}</strong><span>Choices recorded</span></article>
-        <article><strong>${wtFmt(accepted)}</strong><span>Accepted</span></article>
-        <article><strong>${wtFmt(rejected)}</strong><span>Rejected</span></article>
+        <article><strong>${wtFmt(allOptional)}</strong><span>Accept all</span></article>
+        <article><strong>${wtFmt(analyticsOnly)}</strong><span>Analytics only</span></article>
+        <article><strong>${wtFmt(marketingOnly)}</strong><span>Marketing only</span></article>
+        <article><strong>${wtFmt(necessaryOnly)}</strong><span>Necessary only</span></article>
+        <article><strong>${wtFmt(marketingAccepted)}</strong><span>Ads addressable</span></article>
       </div>
     </section>
   `;
@@ -2230,7 +2237,7 @@ function renderWebsiteVisitor(item) {
 }
 
 function websiteEventLabel(event) {
-  return ({ visitor_seen: "Visitor returned", page_view: "Viewed page", page_engaged: "Time on page", link_click: "Clicked link", cta_click: "Clicked call to action", scroll_depth: "Reached page depth", quote_opened: "Opened quote tool", quote_iframe_loaded: "Loaded quote tool", quote_completed: "Completed WindowCAD quote", form_started: "Started form", form_validation_error: "Form validation warning", form_submitted: "Sent form", phone_click: "Tapped phone number", email_click: "Tapped email", chat_opened: "Opened Legend chat", chat_acknowledged: "Accepted chat terms", chat_message_sent: "Sent Legend message", chat_reply_received: "Received Legend reply" })[event] || event;
+  return ({ visitor_seen: "Visitor returned", page_view: "Viewed page", page_engaged: "Time on page", link_click: "Clicked link", cta_click: "Clicked call to action", scroll_depth: "Reached page depth", quote_opened: "Opened quote tool", quote_iframe_loaded: "Quote tool exposure", quote_completed: "Completed WindowCAD quote", form_started: "Started form", form_validation_error: "Form validation warning", form_submitted: "Sent form", phone_click: "Tapped phone number", email_click: "Tapped email", chat_opened: "Opened Legend chat", chat_acknowledged: "Accepted chat terms", chat_message_sent: "Sent Legend message", chat_reply_received: "Received Legend reply" })[event] || event;
 }
 
 function renderWebsiteJourney() {
@@ -2239,7 +2246,7 @@ function renderWebsiteJourney() {
   const journeys = journey.journeys || [];
   const references = journeys.map((item) => `<code>${escapeHtml(item.journey_id)}</code>`).join("");
   const chats = journey.chats || [];
-  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Visitor journey</span><h3><code>${escapeHtml(journey.visitor.visitor_id)}</code></h3><p>${escapeHtml(String(journeys.length || 0))} tracked journey${journeys.length === 1 ? "" : "s"} · anonymous and consented</p><div class="website-journey-refs"><span>WindowCAD tracking reference${journeys.length === 1 ? "" : "s"}</span>${references || "<em>No WindowCAD journey yet</em>"}</div></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close <b>×</b></button></div>${chats.length ? `<div class="website-note"><strong>Legend chats</strong><span>${chats.map((chat) => `<button onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read ${escapeHtml(String(chat.messages))}-message chat</button>`).join(' ')}</span></div>` : ''}${events.length ? `<div class="website-timeline">${events.map(renderWebsiteJourneyEvent).join("")}</div>` : `<p class="empty">No detailed events yet.</p>`}</section>`;
+  return `<section class="website-journey-detail"><div class="website-journey-detail__head"><div><span>Visitor journey</span><h3><code>${escapeHtml(journey.visitor.visitor_id)}</code></h3><p>${escapeHtml(String(journeys.length || 0))} tracked journey${journeys.length === 1 ? "" : "s"} · pseudonymous and consented</p><div class="website-journey-refs"><span>WindowCAD tracking reference${journeys.length === 1 ? "" : "s"}</span>${references || "<em>No WindowCAD journey yet</em>"}</div></div><button onclick="window.dashboardWebsiteCloseVisitor()">Close <b>×</b></button></div>${chats.length ? `<div class="website-note"><strong>Legend chats</strong><span>${chats.map((chat) => `<button onclick="window.dashboardWebsiteChat('${escapeHtml(chat.conversation_id)}')">Read ${escapeHtml(String(chat.messages))}-message chat</button>`).join(' ')}</span></div>` : ''}${events.length ? `<div class="website-timeline">${events.map(renderWebsiteJourneyEvent).join("")}</div>` : `<p class="empty">No detailed events yet.</p>`}</section>`;
 }
 
 function renderWebsiteJourneyEvent(event) {
@@ -2259,7 +2266,7 @@ function renderWebsiteEvent(item) {
     <tr>
       <td>${escapeHtml(formatDateTime(item.occurred_at))}</td>
       <td><strong>${escapeHtml(item.event_type === "quote_completed" ? "WindowCAD quote" : "Website form")}</strong></td>
-      <td><select class="website-outcome-select" aria-label="Lead status" onchange="window.dashboardWebsiteOutcome('${escapeHtml(item.journey_id)}', this.value)">${["new", "contacted", "appointment", "won", "lost"].map((status) => `<option value="${status}" ${status === (item.outcome_status || "new") ? "selected" : ""}>${status[0].toUpperCase() + status.slice(1)}</option>`).join("")}</select></td>
+      <td><select class="website-outcome-select" aria-label="Lead status" onchange="window.dashboardWebsiteOutcome('${escapeHtml(item.journey_id)}', this.value)">${["new", "contacted", "qualified", "appointment", "won", "lost"].map((status) => `<option value="${status}" ${status === (item.outcome_status || "new") ? "selected" : ""}>${status[0].toUpperCase() + status.slice(1)}</option>`).join("")}</select></td>
       <td>${escapeHtml(source)}</td>
       <td>${escapeHtml(item.landing_path || item.page_path || "—")}</td>
       <td>${escapeHtml([product, value].filter(Boolean).join(" · "))}</td>

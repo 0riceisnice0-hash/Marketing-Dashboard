@@ -41,7 +41,7 @@ An `FG2` is not expected to equal the visitor's `FGV`: it is the reference that 
 - A returning consenting browser normally keeps the same `FGV` for 90 days. Incognito, cleared site storage, a new browser/device or an expired ID becomes a different visitor.
 - Rejected/no-choice visitors can still submit a WindowCAD quote or website form to the office, but they do **not** get a consented tracker visitor, journey or individual browsing record. Separate aggregate-only statistical totals may include their page views and high-level actions.
 - Consent Health is aggregate-only and distinguishes `Accept all`, `Analytics only`, `Marketing only` and `Necessary only`. It is never tied to a visitor, page, source, device or journey.
-- Banner impressions are counted separately from choices so abandonment and implementation failures remain visible.
+- Banner impressions (`banner_shown`) are counted separately from choices, but only as an implementation health check: a live figure of zero means the consent modal or the `/consent` endpoint has broken. **They cannot measure abandonment.** The count structurally undercounts against choices, so impressions minus choices can go negative. See the note under Overview and funnel for why, and never build a rate on it.
 
 ### Non-consented statistical traffic
 
@@ -77,12 +77,30 @@ reports the percentage of page views that came from visitors who accepted
 analytics, and the count of cookie choices recorded.
 
 That headline is deliberately the **page-view split**, not "percentage who
-answered the banner". `banner_shown` is unreliable — pre-consent crawler and
-session traffic distort it — and in production it undercounts against the choices
-actually recorded (562 choices against 499 impressions on 3 August 2026), which
-rendered as a nonsensical "113% of visitors answered". A ratio that can exceed
-100% is not a measurement. The choice *count* is sound, so it is shown as a
-count and never as a rate.
+answered the banner". In production `banner_shown` undercounts against the
+choices actually recorded (562 choices against 499 impressions on 3 August
+2026), which rendered as a nonsensical "113% of visitors answered". A ratio that
+can exceed 100% is not a measurement. The choice *count* is sound, so it is
+shown as a count and never as a rate.
+
+**The undercount is structural, not crawler noise.** That was the assumption for
+a while and it is wrong, which matters because it means the gap will not settle
+down on its own. Two deterministic causes, either enough by itself:
+
+1. The theme records an impression only when the *mandatory* first-visit modal
+   opens (`openDialog(true)` in `inc/consent.php`). Footer **Cookie settings**
+   reopens the same dialog through `openDialog(false)`, which records no
+   impression, while saving from that panel still records a choice. Every
+   preference change after the first is a choice with no matching impression.
+2. The consent queries `UNION` the v1 `website_consent_daily` table. Impression
+   recording was removed from the theme on 13 July 2026 while accepts and
+   rejects kept being written, so every pre-31-July row contributes choices
+   against zero impressions.
+
+Pre-consent crawler and prefetch traffic moves the number in both directions on
+top of that. The consequence is that **impressions minus choices is not an
+abandonment figure** — it can go negative. Treat `banner_shown` as a binary
+health check and nothing more.
 
 | Metric | What it means | Do not read it as |
 | --- | --- | --- |
@@ -200,7 +218,7 @@ Office lead outcomes, booked consultations, qualified leads and confirmed sales 
 | WindowCAD completion is missing | Confirm the quote URL uses `tracking`, the value starts `FG2-` (analytics) or `FGA-` (marketing-only), and the WordPress callback has run. WindowCAD's capture is invisible and URL-driven: the app stores the `tracking=` URL value under its Tracking property independent of the visible form field list (verified end-to-end July 2026). A submission with no tracking value means the session did not start from a site URL — office-entered projects and direct or re-opened WindowCAD links are the normal causes. **Known failure (July 2026): AdminBase renewed its TLS certificate onto the Sectigo R46 root, WordPress' bundled CA file predated it, and relays failed with cURL error 60** — leads stayed in WordPress with `_fenster_adminbase_sent = 0`; the theme now uses the host system trust store for AdminBase requests and sends the dashboard `quote_completed` before the AdminBase attempt. The Overview tab shows an amber alert counting completions that arrive without a tracking reference (relayed into the aggregate statistics as `quote_completed`). |
 | A WindowCAD row has `FG2` but no customer match | Search the Customer database/timeline for that `FG2`; it should appear as a completed quote event against an `FGV` visitor. If it does not, inspect the relay rather than creating office test quotes. |
 | Meta is not visible as a source | Confirm the live ad URL carries the UTM parameters and test a fresh, consented browser journey. |
-| Consent Health is zero | Check that a fresh visitor makes a granular choice, then confirm the dashboard API/state response and deployed frontend. Compare choices with banner impressions to spot abandonment. |
+| Consent Health is zero | Check that a fresh visitor makes a granular choice, then confirm the dashboard API/state response and deployed frontend. Do not diagnose this by comparing choices with banner impressions; that difference is not abandonment. |
 | Legend Chats is empty | Send a real message, not merely open the drawer; then check the site-to-dashboard chat endpoint and dashboard deployment. Rejected-cookie chats should be chat-only, not Customer database rows. |
 | Counts look larger than expected | Check whether the metric counts actions/journeys rather than people. Multiple starts or WindowCAD submissions from one visitor are legitimate. |
 | History disappears after a deploy | Check `SELECT environment, COUNT(*) FROM website_events GROUP BY environment` before anything else. A migration that adds a defaulted column will strand every existing row under that default while the reads still filter on `production`. See the 31 July 2026 blackout above. |

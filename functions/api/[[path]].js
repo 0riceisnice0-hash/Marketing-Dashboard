@@ -1077,7 +1077,7 @@ async function fensterWebsiteOutcome(env, request) {
   if (!journeyId || !["new", "contacted", "qualified", "appointment", "won", "lost"].includes(status)) {
     return json({ error: "A valid journey and sales outcome are required" }, 400);
   }
-  const exists = await env.DB.prepare("SELECT 1 FROM website_events WHERE journey_id = ? AND environment = 'production' AND event_type IN ('quote_completed', 'form_submitted') LIMIT 1").bind(journeyId).first();
+  const exists = await env.DB.prepare("SELECT 1 FROM website_events WHERE journey_id = ? AND environment IN ('production','legacy') AND event_type IN ('quote_completed', 'form_submitted') LIMIT 1").bind(journeyId).first();
   if (!exists) return json({ error: "That journey has no completed website lead" }, 404);
   await env.DB.prepare(`
     INSERT INTO website_lead_outcomes (journey_id, status, updated_at, environment) VALUES (?, ?, ?, 'production')
@@ -1091,17 +1091,17 @@ async function fensterWebsiteVisitor(env, value) {
   if (!visitorId) return json({ error: "Invalid visitor" }, 400);
 
   const [visitor, journeys, events, chats] = await Promise.all([
-    env.DB.prepare("SELECT * FROM website_visitors WHERE visitor_id = ? AND environment = 'production'").bind(visitorId).first(),
-    env.DB.prepare("SELECT journey_id, first_event_at, last_event_at, landing_path, source, medium, campaign FROM website_journeys WHERE visitor_id = ? AND environment = 'production' ORDER BY first_event_at ASC").bind(visitorId).all(),
+    env.DB.prepare("SELECT * FROM website_visitors WHERE visitor_id = ? AND environment IN ('production','legacy')").bind(visitorId).first(),
+    env.DB.prepare("SELECT journey_id, first_event_at, last_event_at, landing_path, source, medium, campaign FROM website_journeys WHERE visitor_id = ? AND environment IN ('production','legacy') ORDER BY first_event_at ASC").bind(visitorId).all(),
     env.DB.prepare(`
       SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.link_target, e.page_duration_seconds, e.product_collection, e.price_amount, e.price_currency, e.event_value, e.journey_id
       FROM website_events e
       INNER JOIN website_journeys j ON j.journey_id = e.journey_id
-      WHERE j.visitor_id = ? AND e.environment = 'production' AND j.environment = 'production'
+      WHERE j.visitor_id = ? AND e.environment IN ('production','legacy') AND j.environment IN ('production','legacy')
       ORDER BY e.occurred_at ASC
       LIMIT 500
     `).bind(visitorId).all()
-    ,env.DB.prepare(`SELECT conversation_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE visitor_id = ? AND expires_at > ? AND environment = 'production' GROUP BY conversation_id, journey_id, page_path ORDER BY last_message_at DESC`).bind(visitorId, new Date().toISOString()).all()
+    ,env.DB.prepare(`SELECT conversation_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE visitor_id = ? AND expires_at > ? AND environment IN ('production','legacy') GROUP BY conversation_id, journey_id, page_path ORDER BY last_message_at DESC`).bind(visitorId, new Date().toISOString()).all()
   ]);
 
   if (!visitor) return json({ error: "Visitor not found" }, 404);
@@ -1111,24 +1111,49 @@ async function fensterWebsiteVisitor(env, value) {
 async function fensterWebsiteChat(env, value) {
   const conversationId = websiteChatId(value);
   if (!conversationId) return json({ error: "Invalid chat" }, 400);
-  const rows = await env.DB.prepare(`SELECT conversation_id, journey_id, visitor_id, page_path, role, body, created_at FROM website_chat_messages WHERE conversation_id = ? AND expires_at > ? AND environment = 'production' ORDER BY created_at ASC`).bind(conversationId, new Date().toISOString()).all();
+  const rows = await env.DB.prepare(`SELECT conversation_id, journey_id, visitor_id, page_path, role, body, created_at FROM website_chat_messages WHERE conversation_id = ? AND expires_at > ? AND environment IN ('production','legacy') ORDER BY created_at ASC`).bind(conversationId, new Date().toISOString()).all();
   if (!(rows.results || []).length) return json({ error: "Chat not found or expired" }, 404);
   return json({ conversation_id: conversationId, messages: rows.results });
 }
 
+/*
+ * Reporting reads deliberately span two generations of storage.
+ *
+ * Migration 0017 added `environment` to the tracking tables with
+ * DEFAULT 'legacy', and created _v2 copies of the two aggregate tables. Every
+ * row written before it ran was therefore stamped 'legacy', while every read
+ * here filtered on 'production' -- so on 31 July 2026 the dashboard silently
+ * lost its entire history: 8,223 of 9,322 events, 211 of 275 visitors and 221
+ * of 317 journeys became invisible in a single deploy, and the pre-31-July
+ * aggregate counts vanished with the v1 tables they still live in.
+ *
+ * Nothing was deleted, so nothing needed restoring: the reads simply widened.
+ * Filters accept ('production','legacy') and the aggregate/consent queries
+ * UNION their v1 predecessors. Data is left exactly as written -- this is
+ * reversible by narrowing the reads again.
+ *
+ * 'legacy' predates the environment split, so it mixes live and test traffic.
+ * It is reported as production because test.fensterglazing.com is Basic Auth
+ * protected and contributed negligible volume in that window. Traffic recorded
+ * since the split is properly separated and 'test' stays excluded.
+ *
+ * The v1 consent table only recorded accepted/rejected, so for those older days
+ * the decision COUNT is exact -- which is what the coverage figure depends on --
+ * but the four-way necessary/analytics/marketing/all split is approximate.
+ */
 async function fensterWebsiteState(env) {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
   const [events, journeys, uniqueVisitors, recent, visitors, chats, chatCount, outcomes, consent, acquisition, statistical] = await Promise.all([
-    env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? AND environment = 'production' GROUP BY event_type").bind(since).all(),
-    env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ? AND environment = 'production'").bind(since).first(),
-    env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ? AND environment = 'production'").bind(since).first(),
+    env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? AND environment IN ('production','legacy') GROUP BY event_type").bind(since).all(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ? AND environment IN ('production','legacy')").bind(since).first(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ? AND environment IN ('production','legacy')").bind(since).first(),
     env.DB.prepare(`
       SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.product_collection, e.price_amount, e.price_currency,
         j.journey_id, j.landing_path, j.source, j.medium, j.campaign, COALESCE(o.status, 'new') AS outcome_status
       FROM website_events e
       LEFT JOIN website_journeys j ON j.journey_id = e.journey_id
-      LEFT JOIN website_lead_outcomes o ON o.journey_id = e.journey_id AND o.environment = 'production'
-      WHERE e.event_type IN ('form_submitted', 'quote_completed') AND e.environment = 'production'
+      LEFT JOIN website_lead_outcomes o ON o.journey_id = e.journey_id AND o.environment IN ('production','legacy')
+      WHERE e.event_type IN ('form_submitted', 'quote_completed') AND e.environment IN ('production','legacy')
       ORDER BY e.occurred_at DESC LIMIT 16
     `).all(),
     env.DB.prepare(`
@@ -1138,18 +1163,18 @@ async function fensterWebsiteState(env) {
         SUM(CASE WHEN e.event_type = 'quote_completed' THEN 1 ELSE 0 END) AS quotes,
         SUM(CASE WHEN e.event_type = 'form_submitted' THEN 1 ELSE 0 END) AS forms,
         SUM(CASE WHEN e.event_type IN ('phone_click', 'email_click') THEN 1 ELSE 0 END) AS contact_clicks,
-        (SELECT COUNT(DISTINCT c.conversation_id) FROM website_chat_messages c WHERE c.visitor_id = v.visitor_id AND c.expires_at > ? AND c.environment = 'production') AS legend_chats
+        (SELECT COUNT(DISTINCT c.conversation_id) FROM website_chat_messages c WHERE c.visitor_id = v.visitor_id AND c.expires_at > ? AND c.environment IN ('production','legacy')) AS legend_chats
       FROM website_visitors v
-      LEFT JOIN website_journeys j ON j.visitor_id = v.visitor_id AND j.environment = 'production'
-      LEFT JOIN website_events e ON e.journey_id = j.journey_id AND e.environment = 'production'
-      WHERE v.last_seen_at >= ? AND v.environment = 'production'
+      LEFT JOIN website_journeys j ON j.visitor_id = v.visitor_id AND j.environment IN ('production','legacy')
+      LEFT JOIN website_events e ON e.journey_id = j.journey_id AND e.environment IN ('production','legacy')
+      WHERE v.last_seen_at >= ? AND v.environment IN ('production','legacy')
       GROUP BY v.visitor_id
       ORDER BY v.last_seen_at DESC LIMIT 100
     `).bind(new Date().toISOString(), since).all()
-    ,env.DB.prepare(`SELECT conversation_id, visitor_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE expires_at > ? AND environment = 'production' GROUP BY conversation_id, visitor_id, journey_id, page_path ORDER BY last_message_at DESC LIMIT 50`).bind(new Date().toISOString()).all()
-    ,env.DB.prepare("SELECT COUNT(DISTINCT conversation_id) AS count FROM website_chat_messages WHERE expires_at > ? AND environment = 'production'").bind(new Date().toISOString()).first()
-    ,env.DB.prepare("SELECT status, COUNT(*) AS count FROM website_lead_outcomes WHERE environment = 'production' GROUP BY status").all()
-    ,env.DB.prepare("SELECT COALESCE(SUM(banner_shown), 0) AS shown, COALESCE(SUM(necessary_only), 0) AS necessary_only, COALESCE(SUM(analytics_only), 0) AS analytics_only, COALESCE(SUM(marketing_only), 0) AS marketing_only, COALESCE(SUM(all_optional), 0) AS all_optional FROM website_consent_daily_v2 WHERE day >= ? AND environment = 'production'").bind(since.slice(0, 10)).first()
+    ,env.DB.prepare(`SELECT conversation_id, visitor_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE expires_at > ? AND environment IN ('production','legacy') GROUP BY conversation_id, visitor_id, journey_id, page_path ORDER BY last_message_at DESC LIMIT 50`).bind(new Date().toISOString()).all()
+    ,env.DB.prepare("SELECT COUNT(DISTINCT conversation_id) AS count FROM website_chat_messages WHERE expires_at > ? AND environment IN ('production','legacy')").bind(new Date().toISOString()).first()
+    ,env.DB.prepare("SELECT status, COUNT(*) AS count FROM website_lead_outcomes WHERE environment IN ('production','legacy') GROUP BY status").all()
+    ,env.DB.prepare("SELECT COALESCE(SUM(banner_shown), 0) AS shown, COALESCE(SUM(necessary_only), 0) AS necessary_only, COALESCE(SUM(analytics_only), 0) AS analytics_only, COALESCE(SUM(marketing_only), 0) AS marketing_only, COALESCE(SUM(all_optional), 0) AS all_optional FROM (SELECT environment, day, banner_shown, necessary_only, analytics_only, marketing_only, all_optional FROM website_consent_daily_v2 UNION ALL SELECT 'production' AS environment, day, banner_shown, rejected AS necessary_only, 0 AS analytics_only, 0 AS marketing_only, accepted AS all_optional FROM website_consent_daily) AS con WHERE day >= ? AND environment IN ('production','legacy')").bind(since.slice(0, 10)).first()
     ,env.DB.prepare(`
       SELECT
         CASE
@@ -1164,8 +1189,8 @@ async function fensterWebsiteState(env) {
         SUM(CASE WHEN e.event_type = 'form_submitted' THEN 1 ELSE 0 END) AS forms,
         SUM(CASE WHEN e.event_type IN ('phone_click', 'email_click') THEN 1 ELSE 0 END) AS contact_clicks
       FROM website_journeys j
-      LEFT JOIN website_events e ON e.journey_id = j.journey_id AND e.environment = 'production'
-      WHERE j.last_event_at >= ? AND j.environment = 'production'
+      LEFT JOIN website_events e ON e.journey_id = j.journey_id AND e.environment IN ('production','legacy')
+      WHERE j.last_event_at >= ? AND j.environment IN ('production','legacy')
       GROUP BY channel
       ORDER BY quotes DESC, forms DESC, quote_starts DESC, visitors DESC
       LIMIT 12
@@ -1178,14 +1203,14 @@ async function fensterWebsiteState(env) {
         COALESCE(SUM(CASE WHEN event_type = 'form_submitted' THEN count ELSE 0 END), 0) AS forms,
         COALESCE(SUM(CASE WHEN event_type IN ('phone_click', 'email_click') THEN count ELSE 0 END), 0) AS contact_clicks,
         COALESCE(SUM(CASE WHEN event_type = 'quote_completed' THEN count ELSE 0 END), 0) AS quote_completions
-      FROM website_statistical_aggregate_v2
-      WHERE day >= ? AND device_type <> 'bot' AND environment = 'production'
+      FROM (SELECT environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate_v2 UNION ALL SELECT 'production' AS environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate) AS agg
+      WHERE day >= ? AND device_type <> 'bot' AND environment IN ('production','legacy')
     `).bind(since.slice(0, 10)).first()
   ]);
   const totals = Object.fromEntries((events.results || []).map((row) => [row.event_type, Number(row.count || 0)]));
   const quoteJourneys = await env.DB.prepare(`
     SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
-    WHERE occurred_at >= ? AND event_type = 'quote_opened' AND environment = 'production'
+    WHERE occurred_at >= ? AND event_type = 'quote_opened' AND environment IN ('production','legacy')
   `).bind(since).first();
 
   const sinceDay = since.slice(0, 10);
@@ -1195,40 +1220,40 @@ async function fensterWebsiteState(env) {
         SUM(CASE WHEN event_type = 'page_view' THEN 1 ELSE 0 END) AS page_views,
         SUM(CASE WHEN event_type = 'quote_opened' THEN 1 ELSE 0 END) AS quote_starts,
         SUM(CASE WHEN event_type IN ('quote_completed', 'form_submitted') THEN 1 ELSE 0 END) AS leads
-      FROM website_events WHERE occurred_at >= ? AND environment = 'production' GROUP BY day ORDER BY day ASC
+      FROM website_events WHERE occurred_at >= ? AND environment IN ('production','legacy') GROUP BY day ORDER BY day ASC
     `).bind(since).all(),
     env.DB.prepare(`
       SELECT day,
         SUM(CASE WHEN event_type = 'page_view' THEN count ELSE 0 END) AS page_views,
         SUM(CASE WHEN event_type = 'quote_completed' THEN count ELSE 0 END) AS quote_completions
-      FROM website_statistical_aggregate_v2 WHERE day >= ? AND device_type <> 'bot' AND environment = 'production' GROUP BY day ORDER BY day ASC
+      FROM (SELECT environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate_v2 UNION ALL SELECT 'production' AS environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate) AS agg WHERE day >= ? AND device_type <> 'bot' AND environment IN ('production','legacy') GROUP BY day ORDER BY day ASC
     `).bind(sinceDay).all(),
-    env.DB.prepare("SELECT day, necessary_only, analytics_only, marketing_only, all_optional FROM website_consent_daily_v2 WHERE day >= ? AND environment = 'production' ORDER BY day ASC").bind(sinceDay).all(),
+    env.DB.prepare("SELECT day, necessary_only, analytics_only, marketing_only, all_optional FROM (SELECT environment, day, banner_shown, necessary_only, analytics_only, marketing_only, all_optional FROM website_consent_daily_v2 UNION ALL SELECT 'production' AS environment, day, banner_shown, rejected AS necessary_only, 0 AS analytics_only, 0 AS marketing_only, accepted AS all_optional FROM website_consent_daily) AS con WHERE day >= ? AND environment IN ('production','legacy') ORDER BY day ASC").bind(sinceDay).all(),
     env.DB.prepare(`
       SELECT page_path,
         SUM(CASE WHEN event_type = 'page_view' THEN 1 ELSE 0 END) AS views,
         CAST(ROUND(AVG(CASE WHEN event_type = 'page_engaged' AND page_duration_seconds > 0 THEN page_duration_seconds END)) AS INTEGER) AS avg_seconds
       FROM website_events
-      WHERE occurred_at >= ? AND environment = 'production' AND event_type IN ('page_view', 'page_engaged') AND page_path <> ''
+      WHERE occurred_at >= ? AND environment IN ('production','legacy') AND event_type IN ('page_view', 'page_engaged') AND page_path <> ''
       GROUP BY page_path HAVING views > 0 ORDER BY views DESC LIMIT 12
     `).bind(since).all(),
     env.DB.prepare(`
-      SELECT page_path, SUM(count) AS views FROM website_statistical_aggregate_v2
-      WHERE day >= ? AND environment = 'production' AND event_type = 'page_view' AND device_type NOT IN ('bot', 'server')
+      SELECT page_path, SUM(count) AS views FROM (SELECT environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate_v2 UNION ALL SELECT 'production' AS environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate) AS agg
+      WHERE day >= ? AND environment IN ('production','legacy') AND event_type = 'page_view' AND device_type NOT IN ('bot', 'server')
       GROUP BY page_path ORDER BY views DESC LIMIT 12
     `).bind(sinceDay).all(),
     env.DB.prepare(`
-      SELECT device_type, SUM(count) AS views FROM website_statistical_aggregate_v2
-      WHERE day >= ? AND environment = 'production' AND event_type = 'page_view' GROUP BY device_type ORDER BY views DESC
+      SELECT device_type, SUM(count) AS views FROM (SELECT environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate_v2 UNION ALL SELECT 'production' AS environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate) AS agg
+      WHERE day >= ? AND environment IN ('production','legacy') AND event_type = 'page_view' GROUP BY device_type ORDER BY views DESC
     `).bind(sinceDay).all(),
     env.DB.prepare(`
       SELECT cta, COUNT(*) AS clicks FROM website_events
-      WHERE occurred_at >= ? AND environment = 'production' AND event_type = 'cta_click' AND cta <> ''
+      WHERE occurred_at >= ? AND environment IN ('production','legacy') AND event_type = 'cta_click' AND cta <> ''
       GROUP BY cta ORDER BY clicks DESC LIMIT 10
     `).bind(since).all(),
     env.DB.prepare(`
       SELECT cta AS field, COUNT(*) AS warnings FROM website_events
-      WHERE occurred_at >= ? AND environment = 'production' AND event_type = 'form_validation_error' AND cta <> ''
+      WHERE occurred_at >= ? AND environment IN ('production','legacy') AND event_type = 'form_validation_error' AND cta <> ''
       GROUP BY cta ORDER BY warnings DESC LIMIT 8
     `).bind(since).all(),
     env.DB.prepare(`
@@ -1236,7 +1261,7 @@ async function fensterWebsiteState(env) {
         SUM(CASE WHEN event_type = 'quote_opened' THEN 1 ELSE 0 END) AS opens,
         SUM(CASE WHEN event_type = 'quote_completed' THEN 1 ELSE 0 END) AS completions
       FROM website_events
-      WHERE occurred_at >= ? AND environment = 'production' AND product_collection <> ''
+      WHERE occurred_at >= ? AND environment IN ('production','legacy') AND product_collection <> ''
       GROUP BY product_collection ORDER BY completions DESC, opens DESC LIMIT 10
     `).bind(since).all()
   ]);

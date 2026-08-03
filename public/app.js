@@ -1,4 +1,11 @@
-const tabs = [
+// The tracker is the reason this dashboard gets opened, so it is the landing
+// view and owns the primary nav on its own. The marketing workspace is still a
+// click away, but it no longer sits between the user and the numbers.
+const primaryTabs = [
+  { id: "tracker", label: "Website Tracker", icon: "W" }
+];
+
+const workspaceTabs = [
   { id: "dashboard", label: "Dashboard", icon: "D" },
   { id: "projects", label: "Projects", icon: "P" },
   { id: "tickets", label: "Tickets", icon: "T" },
@@ -7,7 +14,10 @@ const tabs = [
   { id: "social", label: "Social Media", icon: "S" }
 ];
 
+const tabs = [...primaryTabs, ...workspaceTabs];
+
 const viewCopy = {
+  tracker: "Consent-led attribution. Customer details stay in WordPress and AdminBase.",
   dashboard: "What matters now, what is blocked, and what has recently shipped.",
   projects: "Choose a work area, then link tickets, ideas, plans, and updates into it.",
   tickets: "Requests stay separate, with each one linked to a project area.",
@@ -251,7 +261,8 @@ let websiteChatTranscript = null;
 let fensterTab = "awaiting";
 let toolsTab = "hub";
 let selectedFensterConversationId = null;
-let current = "dashboard";
+let current = "tracker";
+let workspaceOpen = false;
 let selectedProjectKey = "";
 let selectedReportDate = new Date().toISOString().slice(0, 10);
 let selectedTicketFilter = "";
@@ -338,14 +349,48 @@ function wireLogin() {
   });
 }
 
-function wireChrome() {
-  $("#tabs").innerHTML = tabs.map((tab) => `
+function navButton(tab) {
+  return `
     <button data-tab="${tab.id}" aria-selected="false">
       <span class="nav-icon">${tab.icon}</span>
       <span>${tab.label}</span>
     </button>
-  `).join("");
+  `;
+}
+
+function paintNav() {
+  // Workspace stays expanded whenever one of its views is active, so the user
+  // never has to re-open the menu to see where they are.
+  const expanded = workspaceOpen || workspaceTabs.some((tab) => tab.id === current);
+  $("#tabs").innerHTML = `
+    <div class="nav-group nav-group--primary">
+      ${primaryTabs.map(navButton).join("")}
+    </div>
+    <div class="nav-group nav-group--workspace">
+      <button type="button" class="nav-group__toggle" data-workspace-toggle aria-expanded="${expanded}">
+        <span class="nav-icon">M</span>
+        <span>Marketing workspace</span>
+        <b class="nav-group__chevron" aria-hidden="true">${expanded ? "–" : "+"}</b>
+      </button>
+      <div class="nav-group__items" ${expanded ? "" : "hidden"}>
+        ${workspaceTabs.map(navButton).join("")}
+      </div>
+    </div>
+  `;
+  document.querySelectorAll("#tabs button[data-tab]").forEach((button) => {
+    button.setAttribute("aria-selected", String(button.dataset.tab === current));
+  });
+}
+
+function wireChrome() {
+  paintNav();
   $("#tabs").addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-workspace-toggle]");
+    if (toggle) {
+      workspaceOpen = toggle.getAttribute("aria-expanded") !== "true";
+      paintNav();
+      return;
+    }
     const button = event.target.closest("button[data-tab]");
     if (!button) return;
     current = button.dataset.tab;
@@ -382,7 +427,9 @@ async function refreshDashboard() {
     const next = normalizeState(await api("/api/bootstrap"));
     notifyNewItems(next);
     state = next;
-    if (current === "projects" && selectedProjectKey === "tools") {
+    if (current === "tracker") {
+      await loadWebsite(true);
+    } else if (current === "projects" && selectedProjectKey === "tools") {
       if (toolsTab === "meta") {
         await api("/api/fenster/meta/sync", { method: "POST", body: {} });
         await loadFenster(true);
@@ -454,13 +501,12 @@ function sendBrowserNotification(title, body) {
 
 function render() {
   rememberDashboardDrafts(view);
-  $("#view-title").textContent = tabs.find((tab) => tab.id === current)?.label || "Dashboard";
+  $("#view-title").textContent = tabs.find((tab) => tab.id === current)?.label || "Website Tracker";
   document.querySelector(".topbar .eyebrow").textContent = viewCopy[current] || "Live marketing command desk";
-  document.querySelectorAll("#tabs button").forEach((button) => {
-    button.setAttribute("aria-selected", String(button.dataset.tab === current));
-  });
+  paintNav();
 
   const renderers = {
+    tracker: renderTrackerArea,
     dashboard: renderDashboard,
     projects: renderProjects,
     tickets: renderTickets,
@@ -469,7 +515,7 @@ function render() {
     social: renderSocial
   };
 
-  (renderers[current] || renderDashboard)();
+  (renderers[current] || renderTrackerArea)();
   restoreDashboardDrafts(view);
   wireBoardDragDrop();
 }
@@ -1777,6 +1823,27 @@ function renderMetaToolShell() {
   loadCurrentTool(true);
 }
 
+// Top-level tracker: the same tool, but landed on directly rather than reached
+// through Projects > Tools, so it carries no "back to Tools" affordance.
+function renderTrackerArea() {
+  view.innerHTML = `
+    <div class="wt-shell">
+      <div class="wt-shell__head">
+        <div class="wt-shell__title">
+          <h3>Website Tracker</h3>
+          <p>Consent-led attribution. Customer details stay in WordPress and AdminBase.</p>
+        </div>
+        <div class="wt-shell__actions">
+          <button class="tool-action" onclick="window.dashboardWebsiteRefresh()">Refresh</button>
+        </div>
+      </div>
+      <p id="website-status" class="result-note">Loading website reporting...</p>
+      <div id="website-app" class="website-app"></div>
+    </div>
+  `;
+  loadWebsite(true);
+}
+
 function renderWebsiteToolShell() {
   view.innerHTML = `
     <div class="tools-head">
@@ -1846,7 +1913,7 @@ async function loadCurrentTool(force = false) {
 async function loadWebsite(force = false) {
   const mount = $("#website-app");
   const status = $("#website-status");
-  if (!mount || (!force && current !== "tools" && selectedProjectKey !== "tools")) return;
+  if (!mount || (!force && current !== "tracker" && current !== "tools" && selectedProjectKey !== "tools")) return;
   try {
     websiteState = await api("/api/fenster/website/state");
     status.textContent = "";

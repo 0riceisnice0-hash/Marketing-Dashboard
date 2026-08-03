@@ -270,6 +270,94 @@ textarea:focus {
   color: #fff;
 }
 
+/* The tracker sits alone above the rule; the marketing workspace collapses
+   below it so the sidebar reads as "the numbers, then everything else". */
+.nav-group {
+  display: grid;
+  gap: 6px;
+}
+
+.nav-group--workspace {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.nav-group__toggle {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #9db4bb;
+  font-size: 0.74rem;
+  font-weight: 950;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.nav-group__toggle:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+}
+
+.nav-group__chevron {
+  font-size: 1.05rem;
+  line-height: 1;
+  opacity: 0.75;
+}
+
+.nav-group__items {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.nav-group__items[hidden] {
+  display: none;
+}
+
+/* Top-level tracker shell: same information as the tools version, without the
+   back-to-Tools chrome that no longer applies. */
+.wt-shell__head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.wt-shell__title {
+  flex: 1;
+  min-width: 220px;
+}
+
+.wt-shell__title h3 {
+  margin: 2px 0 4px;
+  color: #133f58;
+  font-size: 1.5rem;
+  letter-spacing: -.02em;
+}
+
+.wt-shell__title p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+.wt-shell__actions {
+  display: flex;
+  gap: 8px;
+}
+
 .workspace {
   min-width: 0;
   padding: 30px clamp(18px, 3vw, 38px);

@@ -1965,20 +1965,34 @@ function renderWebsiteTool() {
 
 function wtOverview() {
   const s = websiteState;
+  /*
+   * The headline is every lead the site produced, consented or not, because
+   * that is the number the business is actually judged on. The consented-only
+   * counts sit behind it as the attributable subset -- the part that can be
+   * traced to a source. Showing only the consented figure understated leads by
+   * whatever share never answered the banner, which is most of them.
+   */
+  const stat = s.statistical || {};
+  const totalQuotes = Number(s.quotes || 0) + Number(stat.quoteCompletions || 0);
+  const totalForms = Number(s.forms || 0) + Number(stat.forms || 0);
+  const totalLeads = totalQuotes + totalForms;
+  const attributable = Number(s.quotes || 0) + Number(s.forms || 0);
+
   const kpis = [
-    [s.uniqueVisitors, "Consented visitors", "last 30 days"],
-    [s.journeys, "Journeys", "visits recorded"],
-    [s.quoteJourneys, "Quote starts", "deliberate opens"],
-    [s.quotes, "WindowCAD quotes", "consented completions"],
-    [s.forms, "Forms sent", `${wtFmt(s.formStarts)} started`],
-    [s.calls, "Phone / email clicks", "contact intent only"],
+    [totalLeads, "Leads", `${wtFmt(attributable)} traceable to a source`],
+    [totalQuotes, "WindowCAD quotes", `${wtFmt(s.quotes || 0)} consented`],
+    [totalForms, "Forms sent", `${wtFmt(totalForms ? (s.formStarts || 0) + (stat.formStarts || 0) : 0)} started`],
+    [Number(s.quoteJourneys || 0) + Number(stat.quoteStarts || 0), "Quote starts", "deliberate opens"],
+    [Number(s.calls || 0) + Number(stat.contactClicks || 0), "Phone / email clicks", "intent only, not answered calls"],
+    [s.uniqueVisitors, "Consented visitors", `${wtFmt(s.journeys)} journeys`],
     [s.legendChats, "Legend chats", "saved for 30-day QA"],
     [s.outcomes?.won || 0, "Won leads", "marked by the office"]
   ];
   return `
+    ${wtCoverage()}
     ${wtTrackingAlert()}
-    <div class="wt-kpis">${kpis.map(([value, label, hint]) => `
-      <article class="wt-kpi"><strong>${wtFmt(value)}</strong><span>${label}</span><small>${hint}</small></article>
+    <div class="wt-kpis">${kpis.map(([value, label, hint], index) => `
+      <article class="wt-kpi ${index === 0 ? "wt-kpi--lead" : ""}"><strong>${wtFmt(value)}</strong><span>${label}</span><small>${hint}</small></article>
     `).join("")}</div>
     ${wtTrend()}
     <div class="wt-grid wt-grid--two">
@@ -1987,6 +2001,61 @@ function wtOverview() {
     </div>
     ${wtDecision()}
     ${wtRecentLeads()}
+  `;
+}
+
+/*
+ * Every other number on this screen is a subset of the traffic, so the screen
+ * has to say so before it says anything else. Visitors who never answer the
+ * cookie banner never get a visitor ID, a journey, a source or a timeline --
+ * they exist only as anonymous hourly counts. Measured on 2 August 2026 that
+ * was roughly 85% of everyone who saw the banner, which makes an unqualified
+ * "unique visitors" figure actively misleading. This panel states the split in
+ * the reader's first glance rather than burying it in a Consent Health tab.
+ */
+function wtCoverage() {
+  const consent = websiteState.consent || {};
+  const shown = Number(consent.shown || 0);
+  const decisions = Number(consent.necessary_only || 0)
+    + Number(consent.analytics_only || 0)
+    + Number(consent.marketing_only || 0)
+    + Number(consent.all_optional || 0);
+
+  const consentedViews = (websiteState.series?.events || [])
+    .reduce((total, row) => total + Number(row.page_views || 0), 0);
+  const anonymousViews = Number(websiteState.statistical?.pageViews || 0);
+  const totalViews = consentedViews + anonymousViews;
+
+  const decisionRate = shown ? Math.round((decisions / shown) * 100) : 0;
+  const consentedShare = totalViews ? Math.round((consentedViews / totalViews) * 100) : 0;
+
+  if (!shown && !totalViews) {
+    return `
+      <div class="fw-empty">
+        <strong>No traffic recorded yet for this period</strong>
+        <span>Once the website reports its first consented visit, coverage appears here.</span>
+      </div>
+    `;
+  }
+
+  return `
+    <section class="fw-coverage">
+      <div class="fw-coverage__head">
+        <strong>${decisionRate}% of visitors answered the cookie banner</strong>
+        <span>${wtFmt(decisions)} of ${wtFmt(shown)} in the last ${websiteState.periodDays || 30} days</span>
+      </div>
+      <div class="fw-coverage__bar" role="img"
+        aria-label="${wtFmt(consentedViews)} consented page views and ${wtFmt(anonymousViews)} anonymous page views">
+        <i style="width:${consentedShare}%"></i><i style="width:${100 - consentedShare}%"></i>
+      </div>
+      <p class="fw-coverage__note">
+        <b>${wtFmt(consentedViews)}</b> page views came from visitors who accepted analytics
+        (${consentedShare}%), and <b>${wtFmt(anonymousViews)}</b> from visitors who did not.
+        Only the consented share has a visitor ID, a journey, a traffic source or a timeline &mdash;
+        everything below headed &ldquo;consented&rdquo; is drawn from that share alone,
+        not from all of your traffic.
+      </p>
+    </section>
   `;
 }
 

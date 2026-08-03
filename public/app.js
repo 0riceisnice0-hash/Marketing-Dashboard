@@ -256,6 +256,7 @@ let state = {};
 let fensterState = null;
 let websiteState = null;
 let websiteView = "overview";
+let websitePeriodDays = 30;
 let websiteVisitorJourney = null;
 let websiteChatTranscript = null;
 let fensterTab = "awaiting";
@@ -1826,12 +1827,19 @@ function renderMetaToolShell() {
 // Top-level tracker: the same tool, but landed on directly rather than reached
 // through Projects > Tools, so it carries no "back to Tools" affordance.
 function renderTrackerArea() {
+  // The topbar above already prints "Website Tracker" and the same subtitle, so
+  // this header carries the controls only rather than saying it a second time.
+  const periods = [7, 30, 90, 365];
   view.innerHTML = `
     <div class="wt-shell">
       <div class="wt-shell__head">
-        <div class="wt-shell__title">
-          <h3>Website Tracker</h3>
-          <p>Consent-led attribution. Customer details stay in WordPress and AdminBase.</p>
+        <div class="fw-periods" role="group" aria-label="Reporting period">
+          ${periods.map((days) => `
+            <button class="fw-period ${websitePeriodDays === days ? "is-active" : ""}"
+              onclick="window.dashboardWebsitePeriod(${days})">
+              ${days === 365 ? "1 year" : `${days} days`}
+            </button>
+          `).join("")}
         </div>
         <div class="wt-shell__actions">
           <button class="tool-action" onclick="window.dashboardWebsiteRefresh()">Refresh</button>
@@ -1842,6 +1850,11 @@ function renderTrackerArea() {
     </div>
   `;
   loadWebsite(true);
+}
+
+function setWebsitePeriod(days) {
+  websitePeriodDays = days;
+  renderTrackerArea();
 }
 
 function renderWebsiteToolShell() {
@@ -1872,7 +1885,7 @@ function setToolsTab(tab) {
 }
 
 function setWebsiteView(nextView) {
-  if (!["overview", "acquisition", "pages", "customers", "chats"].includes(nextView)) return;
+  if (!["overview", "leads", "channels", "behaviour", "visitors", "chats"].includes(nextView)) return;
   websiteView = nextView;
   websiteChatTranscript = null;
   websiteVisitorJourney = null;
@@ -1915,7 +1928,7 @@ async function loadWebsite(force = false) {
   const status = $("#website-status");
   if (!mount || (!force && current !== "tracker" && current !== "tools" && selectedProjectKey !== "tools")) return;
   try {
-    websiteState = await api("/api/fenster/website/state");
+    websiteState = await api(`/api/fenster/website/state?days=${websitePeriodDays}`);
     status.textContent = "";
     renderWebsiteTool();
   } catch (error) {
@@ -1937,18 +1950,26 @@ function wtSeconds(value) {
 function renderWebsiteTool() {
   const mount = $("#website-app");
   if (!mount || !websiteState) return;
+  /*
+   * Tabs are named for the question each answers, not for the table behind it.
+   * "Leads" did not exist before: the completed quotes and sent forms were only
+   * visible as a 16-row strip at the bottom of Overview, which is the wrong
+   * place for the one thing the business is measured on.
+   */
   const views = [
     ["overview", "Overview", 0],
-    ["acquisition", "Acquisition", 0],
-    ["pages", "Pages", 0],
-    ["customers", "Customers", (websiteState.visitors || []).length],
-    ["chats", "Legend chats", (websiteState.chats || []).length]
+    ["leads", "Leads", (websiteState.recent || []).length],
+    ["channels", "Channels", (websiteState.acquisition || []).length],
+    ["behaviour", "Behaviour", 0],
+    ["visitors", "Visitors", (websiteState.visitors || []).length],
+    ["chats", "Legend", (websiteState.chats || []).length]
   ];
   const body = ({
     overview: wtOverview,
-    acquisition: wtAcquisition,
-    pages: wtPages,
-    customers: wtCustomers,
+    leads: wtLeads,
+    channels: wtAcquisition,
+    behaviour: wtPages,
+    visitors: wtCustomers,
     chats: wtChats
   })[websiteView] || wtOverview;
   mount.innerHTML = `
@@ -2000,7 +2021,6 @@ function wtOverview() {
       ${wtConsent()}
     </div>
     ${wtDecision()}
-    ${wtRecentLeads()}
   `;
 }
 
@@ -2009,24 +2029,32 @@ function wtOverview() {
  * has to say so before it says anything else. Visitors who never answer the
  * cookie banner never get a visitor ID, a journey, a source or a timeline --
  * they exist only as anonymous hourly counts. Measured on 2 August 2026 that
- * was roughly 85% of everyone who saw the banner, which makes an unqualified
- * "unique visitors" figure actively misleading. This panel states the split in
- * the reader's first glance rather than burying it in a Consent Health tab.
+ * was the large majority of traffic, which makes an unqualified "unique
+ * visitors" figure actively misleading. This panel states the split in the
+ * reader's first glance rather than burying it in a Consent Health tab.
+ *
+ * The headline is deliberately the PAGE VIEW split, not "% who answered the
+ * banner". banner_shown is documented as unreliable (pre-consent crawler and
+ * session traffic inflate or miss it), and reading production it undercounts
+ * against the choices actually recorded -- 562 choices against 499 impressions,
+ * which rendered as "113% of visitors answered". A ratio that can exceed 100%
+ * is not a measurement. The choice COUNT is sound, so it is shown as a count.
  */
 function wtCoverage() {
   const consent = websiteState.consent || {};
   const shown = Number(consent.shown || 0);
-  const decisions = Number(consent.necessary_only || 0)
-    + Number(consent.analytics_only || 0)
-    + Number(consent.marketing_only || 0)
-    + Number(consent.all_optional || 0);
+  // The API serialises these camelCase; reading them snake_case silently summed
+  // to zero and the panel confidently reported "0% answered the banner".
+  const decisions = Number(consent.necessaryOnly || 0)
+    + Number(consent.analyticsOnly || 0)
+    + Number(consent.marketingOnly || 0)
+    + Number(consent.allOptional || 0);
 
   const consentedViews = (websiteState.series?.events || [])
     .reduce((total, row) => total + Number(row.page_views || 0), 0);
   const anonymousViews = Number(websiteState.statistical?.pageViews || 0);
   const totalViews = consentedViews + anonymousViews;
 
-  const decisionRate = shown ? Math.round((decisions / shown) * 100) : 0;
   const consentedShare = totalViews ? Math.round((consentedViews / totalViews) * 100) : 0;
 
   if (!shown && !totalViews) {
@@ -2041,8 +2069,8 @@ function wtCoverage() {
   return `
     <section class="fw-coverage">
       <div class="fw-coverage__head">
-        <strong>${decisionRate}% of visitors answered the cookie banner</strong>
-        <span>${wtFmt(decisions)} of ${wtFmt(shown)} in the last ${websiteState.periodDays || 30} days</span>
+        <strong>${consentedShare}% of page views are attributable</strong>
+        <span>${wtFmt(decisions)} cookie choices recorded over ${websiteState.periodDays || 30} days</span>
       </div>
       <div class="fw-coverage__bar" role="img"
         aria-label="${wtFmt(consentedViews)} consented page views and ${wtFmt(anonymousViews)} anonymous page views">
@@ -2071,8 +2099,11 @@ function wtTrackingAlert() {
 }
 
 function wtTrend() {
+  // Follow the selected period instead of always drawing 30 columns, which used
+  // to pad the chart with weeks of empty bars whenever history was shorter.
+  const span = Number(websiteState.periodDays || 30);
   const days = [];
-  for (let i = 29; i >= 0; i--) {
+  for (let i = span - 1; i >= 0; i--) {
     days.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
   }
   const events = Object.fromEntries((websiteState.series?.events || []).map((row) => [row.day, row]));
@@ -2223,6 +2254,66 @@ function wtRecentLeads() {
           <tbody>${recent.map(renderWebsiteEvent).join("")}</tbody>
         </table></div>
       ` : `<p class="empty">No completed quotes or sent forms have been attributed yet. They appear here as soon as a consented visitor finishes a quote or form.</p>`}
+    </section>
+  `;
+}
+
+/*
+ * Leads earn their own tab. Previously the only place a completed quote or sent
+ * form appeared individually was a 16-row strip at the foot of Overview, under
+ * four other panels -- the one thing the business is judged on, placed last.
+ */
+function wtLeads() {
+  const rows = websiteState.recent || [];
+  const stat = websiteState.statistical || {};
+  const untraceable = Number(stat.quoteCompletions || 0) + Number(stat.forms || 0);
+
+  if (!rows.length) {
+    return `
+      <div class="fw-empty">
+        <strong>No attributed leads in this period</strong>
+        <span>A lead appears here when a visitor who accepted analytics completes a WindowCAD quote or sends a form.</span>
+      </div>
+    `;
+  }
+
+  const byStatus = rows.reduce((acc, row) => {
+    const key = row.outcome_status || "new";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const chips = ["new", "contacted", "qualified", "appointment", "won", "lost"]
+    .filter((status) => byStatus[status])
+    .map((status) => `<span class="fw-chip fw-chip--${status}">${wtFmt(byStatus[status])} ${status}</span>`)
+    .join("");
+
+  return `
+    ${untraceable ? `
+      <div class="wt-alert">
+        <strong>${wtFmt(untraceable)} more lead${untraceable === 1 ? "" : "s"} arrived without attribution</strong>
+        <span>They reached the office normally and are in WordPress and AdminBase, but the visitor never accepted
+        analytics cookies, so there is no source, landing page or journey to show for them here.</span>
+      </div>
+    ` : ""}
+    <section class="wt-panel">
+      <header class="wt-panel__head">
+        <div>
+          <h4>Attributed leads</h4>
+          <p>Completed WindowCAD quotes and sent forms with the first-touch source that earned them.
+          Set the outcome once you have checked the real lead in AdminBase.</p>
+        </div>
+        <div class="fw-chips">${chips}</div>
+      </header>
+      <div class="wt-table-wrap">
+        <table class="wt-table">
+          <thead>
+            <tr>
+              <th>When</th><th>Lead</th><th>Outcome</th><th>Source</th><th>Landing page</th><th>Product / value</th>
+            </tr>
+          </thead>
+          <tbody>${rows.map(renderWebsiteEvent).join("")}</tbody>
+        </table>
+      </div>
     </section>
   `;
 }
@@ -3346,6 +3437,7 @@ window.dashboardFensterEmailOffice = fensterEmailOffice;
 window.dashboardFensterReject = fensterReject;
 window.dashboardFensterHide = fensterHide;
 window.dashboardWebsiteRefresh = loadWebsite;
+window.dashboardWebsitePeriod = setWebsitePeriod;
 window.dashboardToolsTab = setToolsTab;
 window.dashboardWebsiteView = setWebsiteView;
 window.dashboardWebsiteVisitor = openWebsiteVisitor;

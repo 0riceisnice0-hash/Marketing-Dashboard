@@ -3211,3 +3211,131 @@ dialog::backdrop {
     padding: 13px;
   }
 }
+
+/* ---------- period selector ---------- */
+
+.wt-shell__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.fw-periods {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(14, 27, 33, 0.10);
+  border-radius: 999px;
+  background: #f4f8f8;
+}
+
+.fw-period {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #52646d;
+  font-size: .82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background .16s ease, color .16s ease;
+}
+
+.fw-period:hover {
+  background: rgba(18, 115, 168, .10);
+  color: #1273a8;
+}
+
+.fw-period.is-active {
+  background: #ffffff;
+  color: #0e1b21;
+  box-shadow: 0 1px 2px rgba(14, 27, 33, .10), 0 6px 16px rgba(14, 27, 33, .06);
+}
+
+.wt-shell__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- outcome chips ---------- */
+
+.fw-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fw-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #f4f8f8;
+  color: #52646d;
+  font-size: .74rem;
+  font-weight: 800;
+  letter-spacing: .01em;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.fw-chip--won {
+  background: rgba(12, 163, 12, .12);
+  color: #0a7a0a;
+}
+
+.fw-chip--lost {
+  background: rgba(208, 59, 59, .12);
+  color: #a82f2f;
+}
+
+.fw-chip--appointment,
+.fw-chip--qualified {
+  background: rgba(18, 115, 168, .12);
+  color: #0f6188;
+}
+
+.fw-chip--contacted {
+  background: rgba(112, 87, 200, .12);
+  color: #5a45a8;
+}
+
+/* ---------- outcome select in the leads table ---------- */
+
+.website-outcome-select {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid rgba(14, 27, 33, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0e1b21;
+  font-size: .8rem;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .wt-shell__head {
+    gap: 8px;
+  }
+
+  .fw-periods {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .fw-period {
+    flex: 1;
+    padding: 0 8px;
+  }
+
+  .wt-shell__actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .wt-shell__actions .tool-action {
+    width: 100%;
+  }
+}

@@ -203,7 +203,7 @@ async function fenster(context, route, user) {
   if (request.method === "POST" && route === "bot/stop") return fensterSetBotActive(env, false, user);
   if (request.method === "POST" && route === "bot/process") return json(await processBotQueue(env, user.name));
   if (request.method === "POST" && route === "bot/prompt") return fensterUpdatePromptContext(env, request, user);
-  if (request.method === "GET" && route === "website/state") return fensterWebsiteState(env);
+  if (request.method === "GET" && route === "website/state") return fensterWebsiteState(env, request);
   if (request.method === "POST" && route === "website/outcome") return fensterWebsiteOutcome(env, request);
   const chatMatch = route.match(/^website\/chat\/(CHT-[A-Z0-9-]{8,80})$/i);
   if (request.method === "GET" && chatMatch) return fensterWebsiteChat(env, chatMatch[1]);
@@ -1141,8 +1141,17 @@ async function fensterWebsiteChat(env, value) {
  * the decision COUNT is exact -- which is what the coverage figure depends on --
  * but the four-way necessary/analytics/marketing/all split is approximate.
  */
-async function fensterWebsiteState(env) {
-  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+async function fensterWebsiteState(env, request) {
+  /*
+   * The period was hardcoded to 30 days while the tracker only had four days of
+   * visible history, so the screen claimed a month and showed a long-run of
+   * empty columns. It is a parameter now, clamped to a sane range.
+   */
+  const requestedDays = Number(new URL(request?.url || "https://x/").searchParams.get("days") || 30);
+  const periodDays = Number.isFinite(requestedDays)
+    ? Math.min(365, Math.max(1, Math.round(requestedDays)))
+    : 30;
+  const since = new Date(Date.now() - periodDays * 86400000).toISOString();
   const [events, journeys, uniqueVisitors, recent, visitors, chats, chatCount, outcomes, consent, acquisition, statistical] = await Promise.all([
     env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? AND environment IN ('production','legacy') GROUP BY event_type").bind(since).all(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ? AND environment IN ('production','legacy')").bind(since).first(),
@@ -1154,7 +1163,7 @@ async function fensterWebsiteState(env) {
       LEFT JOIN website_journeys j ON j.journey_id = e.journey_id
       LEFT JOIN website_lead_outcomes o ON o.journey_id = e.journey_id AND o.environment IN ('production','legacy')
       WHERE e.event_type IN ('form_submitted', 'quote_completed') AND e.environment IN ('production','legacy')
-      ORDER BY e.occurred_at DESC LIMIT 16
+      ORDER BY e.occurred_at DESC LIMIT 80
     `).all(),
     env.DB.prepare(`
       SELECT v.visitor_id, v.first_seen_at, v.last_seen_at, v.first_landing_path, v.first_source, v.first_medium, v.first_campaign,
@@ -1169,9 +1178,9 @@ async function fensterWebsiteState(env) {
       LEFT JOIN website_events e ON e.journey_id = j.journey_id AND e.environment IN ('production','legacy')
       WHERE v.last_seen_at >= ? AND v.environment IN ('production','legacy')
       GROUP BY v.visitor_id
-      ORDER BY v.last_seen_at DESC LIMIT 100
+      ORDER BY v.last_seen_at DESC LIMIT 2000
     `).bind(new Date().toISOString(), since).all()
-    ,env.DB.prepare(`SELECT conversation_id, visitor_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE expires_at > ? AND environment IN ('production','legacy') GROUP BY conversation_id, visitor_id, journey_id, page_path ORDER BY last_message_at DESC LIMIT 50`).bind(new Date().toISOString()).all()
+    ,env.DB.prepare(`SELECT conversation_id, visitor_id, journey_id, page_path, MIN(created_at) AS started_at, MAX(created_at) AS last_message_at, COUNT(*) AS messages FROM website_chat_messages WHERE expires_at > ? AND environment IN ('production','legacy') GROUP BY conversation_id, visitor_id, journey_id, page_path ORDER BY last_message_at DESC LIMIT 300`).bind(new Date().toISOString()).all()
     ,env.DB.prepare("SELECT COUNT(DISTINCT conversation_id) AS count FROM website_chat_messages WHERE expires_at > ? AND environment IN ('production','legacy')").bind(new Date().toISOString()).first()
     ,env.DB.prepare("SELECT status, COUNT(*) AS count FROM website_lead_outcomes WHERE environment IN ('production','legacy') GROUP BY status").all()
     ,env.DB.prepare("SELECT COALESCE(SUM(banner_shown), 0) AS shown, COALESCE(SUM(necessary_only), 0) AS necessary_only, COALESCE(SUM(analytics_only), 0) AS analytics_only, COALESCE(SUM(marketing_only), 0) AS marketing_only, COALESCE(SUM(all_optional), 0) AS all_optional FROM (SELECT environment, day, banner_shown, necessary_only, analytics_only, marketing_only, all_optional FROM website_consent_daily_v2 UNION ALL SELECT 'production' AS environment, day, banner_shown, rejected AS necessary_only, 0 AS analytics_only, 0 AS marketing_only, accepted AS all_optional FROM website_consent_daily) AS con WHERE day >= ? AND environment IN ('production','legacy')").bind(since.slice(0, 10)).first()
@@ -1193,7 +1202,7 @@ async function fensterWebsiteState(env) {
       WHERE j.last_event_at >= ? AND j.environment IN ('production','legacy')
       GROUP BY channel
       ORDER BY quotes DESC, forms DESC, quote_starts DESC, visitors DESC
-      LIMIT 12
+      LIMIT 40
     `).bind(since).all()
     ,env.DB.prepare(`
       SELECT
@@ -1235,12 +1244,12 @@ async function fensterWebsiteState(env) {
         CAST(ROUND(AVG(CASE WHEN event_type = 'page_engaged' AND page_duration_seconds > 0 THEN page_duration_seconds END)) AS INTEGER) AS avg_seconds
       FROM website_events
       WHERE occurred_at >= ? AND environment IN ('production','legacy') AND event_type IN ('page_view', 'page_engaged') AND page_path <> ''
-      GROUP BY page_path HAVING views > 0 ORDER BY views DESC LIMIT 12
+      GROUP BY page_path HAVING views > 0 ORDER BY views DESC LIMIT 40
     `).bind(since).all(),
     env.DB.prepare(`
       SELECT page_path, SUM(count) AS views FROM (SELECT environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate_v2 UNION ALL SELECT 'production' AS environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate) AS agg
       WHERE day >= ? AND environment IN ('production','legacy') AND event_type = 'page_view' AND device_type NOT IN ('bot', 'server')
-      GROUP BY page_path ORDER BY views DESC LIMIT 12
+      GROUP BY page_path ORDER BY views DESC LIMIT 40
     `).bind(sinceDay).all(),
     env.DB.prepare(`
       SELECT device_type, SUM(count) AS views FROM (SELECT environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate_v2 UNION ALL SELECT 'production' AS environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate) AS agg
@@ -1249,12 +1258,12 @@ async function fensterWebsiteState(env) {
     env.DB.prepare(`
       SELECT cta, COUNT(*) AS clicks FROM website_events
       WHERE occurred_at >= ? AND environment IN ('production','legacy') AND event_type = 'cta_click' AND cta <> ''
-      GROUP BY cta ORDER BY clicks DESC LIMIT 10
+      GROUP BY cta ORDER BY clicks DESC LIMIT 25
     `).bind(since).all(),
     env.DB.prepare(`
       SELECT cta AS field, COUNT(*) AS warnings FROM website_events
       WHERE occurred_at >= ? AND environment IN ('production','legacy') AND event_type = 'form_validation_error' AND cta <> ''
-      GROUP BY cta ORDER BY warnings DESC LIMIT 8
+      GROUP BY cta ORDER BY warnings DESC LIMIT 25
     `).bind(since).all(),
     env.DB.prepare(`
       SELECT product_collection,
@@ -1262,12 +1271,12 @@ async function fensterWebsiteState(env) {
         SUM(CASE WHEN event_type = 'quote_completed' THEN 1 ELSE 0 END) AS completions
       FROM website_events
       WHERE occurred_at >= ? AND environment IN ('production','legacy') AND product_collection <> ''
-      GROUP BY product_collection ORDER BY completions DESC, opens DESC LIMIT 10
+      GROUP BY product_collection ORDER BY completions DESC, opens DESC LIMIT 25
     `).bind(since).all()
   ]);
 
   return json({
-    periodDays: 30,
+    periodDays,
     journeys: Number(journeys?.count || 0),
     uniqueVisitors: Number(uniqueVisitors?.count || 0),
     quoteJourneys: Number(quoteJourneys?.count || 0),

@@ -51,10 +51,43 @@ The individual browser request is reduced into an hourly bucket at ingestion. Do
 
 ## How to read the dashboard
 
+The Website Tracker is the dashboard's landing view. Everything else — Dashboard,
+Projects, Tickets, Plan, Completed, Social Media — sits under **Marketing
+workspace** in the sidebar, collapsed until you need it.
+
+Six tabs, each named for the question it answers:
+
+| Tab | Answers |
+| --- | --- |
+| **Overview** | What happened in the period: attributable share, headline counts, daily traffic, funnel, consent health |
+| **Leads** | Every attributed completed quote and sent form, with first-touch source and office outcome |
+| **Channels** | Which sources and campaigns produced journeys, quote starts and leads |
+| **Behaviour** | Pages, devices, CTA clicks and form validation friction |
+| **Visitors** | The anonymous consented visitor list and individual journey timelines |
+| **Legend** | Saved Legend transcripts for 30-day quality assurance |
+
+A period control (**7 / 30 / 90 days / 1 year**) sits above the tabs and drives
+every figure and the daily chart. It was previously hardcoded to 30 days.
+
 ### Overview and funnel
+
+Overview opens with an **attributable share** panel, because every other number
+on the screen is a subset of your traffic and the screen has to say so first. It
+reports the percentage of page views that came from visitors who accepted
+analytics, and the count of cookie choices recorded.
+
+That headline is deliberately the **page-view split**, not "percentage who
+answered the banner". `banner_shown` is unreliable — pre-consent crawler and
+session traffic distort it — and in production it undercounts against the choices
+actually recorded (562 choices against 499 impressions on 3 August 2026), which
+rendered as a nonsensical "113% of visitors answered". A ratio that can exceed
+100% is not a measurement. The choice *count* is sound, so it is shown as a
+count and never as a rate.
 
 | Metric | What it means | Do not read it as |
 | --- | --- | --- |
+| Attributable share | Page views from analytics-accepting visitors, over all recorded page views | The proportion of people who accepted |
+| Leads (headline KPI) | Every completed quote and sent form, consented **and** anonymous | Deduplicated people, or confirmed sales |
 | Unique visitors | Distinct consented `FGV` values in the selected period | All people who saw the website |
 | Journeys | Consented visits/sessions recorded by the tracker | Distinct people |
 | CTA clicks | Commercial links/buttons selected | A lead or a sale |
@@ -100,6 +133,43 @@ For a consented completed WindowCAD quote or form, staff can set a non-PII busin
 
 ## Data integrity and environments
 
+### The 31 July 2026 history blackout
+
+Migration `0017` added an `environment` column to the tracking tables with
+`DEFAULT 'legacy'`, and created `_v2` copies of the two aggregate tables. Every
+row written before it ran was therefore stamped `legacy`, while all 32 reporting
+queries filtered on `environment = 'production'`. The dashboard lost its entire
+history in a single deploy:
+
+| Table | Stranded as `legacy` | Still visible |
+| --- | --- | --- |
+| `website_events` | 8,223 | 1,099 |
+| `website_visitors` | 211 | 64 |
+| `website_journeys` | 221 | 96 |
+
+Every aggregate count before 31 July went with it, since those live only in the
+v1 tables that nothing read. This is why the tracker appeared to show no page
+views for most of its own reporting window.
+
+**Nothing was deleted, so nothing needed restoring.** The fix widened the reads:
+filters now accept `('production','legacy')`, and the aggregate and consent
+queries `UNION` their v1 predecessors. Data is left exactly as written, so this
+is reversible by narrowing the reads again.
+
+Two caveats to keep in mind when reading anything before 31 July 2026:
+
+- `legacy` predates the environment split, so it mixes live and test traffic. It
+  is reported as production because `test.fensterglazing.com` is Basic Auth
+  protected and contributed negligible volume in that window.
+- The v1 consent table only recorded accepted/rejected. For those days the
+  decision **count** is exact, but the four-way necessary / analytics / marketing
+  / all split is approximate.
+
+Traffic recorded since the split is properly separated and `test` stays excluded
+from live reporting.
+
+### General
+
 - Browser traffic is classified from the real request `Origin`; JSON cannot claim to be production.
 - Server relays require the shared `WEBSITE_INGEST_SECRET`.
 - Production reporting reads only `environment = production`; test traffic remains available in storage but cannot inflate live KPIs.
@@ -133,6 +203,10 @@ Office lead outcomes, booked consultations, qualified leads and confirmed sales 
 | Consent Health is zero | Check that a fresh visitor makes a granular choice, then confirm the dashboard API/state response and deployed frontend. Compare choices with banner impressions to spot abandonment. |
 | Legend Chats is empty | Send a real message, not merely open the drawer; then check the site-to-dashboard chat endpoint and dashboard deployment. Rejected-cookie chats should be chat-only, not Customer database rows. |
 | Counts look larger than expected | Check whether the metric counts actions/journeys rather than people. Multiple starts or WindowCAD submissions from one visitor are legitimate. |
+| History disappears after a deploy | Check `SELECT environment, COUNT(*) FROM website_events GROUP BY environment` before anything else. A migration that adds a defaulted column will strand every existing row under that default while the reads still filter on `production`. See the 31 July 2026 blackout above. |
+| Channels are almost all "Direct or unknown" | The live ad URLs are not carrying UTM parameters. Nothing in the dashboard can recover a source that was never sent; fix the tagging on the ad destination URLs. Observed across nearly every attributed lead on 3 August 2026. |
+| Leads show no product or value | WindowCAD is not relaying `product_collection` or `price_amount` on the completion callback, so lead value cannot be computed and cost-per-lead stays unavailable. |
+| A consent percentage exceeds 100% | It was derived from `banner_shown`, which is unreliable. Use the page-view split instead and report choices as a count. |
 
 ## Technical ownership
 

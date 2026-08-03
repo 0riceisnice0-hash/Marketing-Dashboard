@@ -36,8 +36,9 @@ If the live file still contains old code, Cloudflare has not deployed the new ve
 - Ideas board.
 - Roadmap tasks.
 - Website work board.
-- Projects → Tools hub with two full-screen tools: the Fenster Meta Bot (social inbox) and the Website Tracker.
-- Website Tracker views: Overview (KPIs, daily traffic chart, funnel, consent health, recent lead outcomes), Acquisition (channels, quote products, top CTAs), Pages (consented and anonymous top pages, devices), Customers (visitor journeys) and Legend chats.
+- **The Website Tracker is the landing view.** Everything above sits under a collapsible "Marketing workspace" group in the sidebar. The tracker was previously three levels deep at Projects → Tools → Website Tracker; that route still works and still hosts the Fenster Meta Bot.
+- Website Tracker tabs, each named for the question it answers: **Overview** (attributable share, headline counts, daily traffic chart, funnel, consent health), **Leads** (attributed completed quotes and sent forms with first-touch source and office outcome), **Channels** (sources, quote products, top CTAs), **Behaviour** (consented and anonymous top pages, devices, form friction), **Visitors** (consented visitor list and journey timelines) and **Legend** (chat QA).
+- Reporting period control: 7 / 30 / 90 days / 1 year, driving every figure and the daily chart.
 - Auto-refresh-safe browser-session drafts for end-of-day reports, Facebook/Instagram replies and bot context, so the 60-second refresh cannot discard text being written.
 - Notes attached to records through the shared `notes` table.
 
@@ -202,6 +203,34 @@ curl https://marketing-dashboard-1d0.pages.dev/app.js
 ```
 
 Search that output for a string from your new code. If it is not there, Cloudflare is still serving an older deployment.
+
+Three things that will catch you out:
+
+- **`--branch main` is not optional.** Without it wrangler names the deployment
+  after your current git branch and publishes a *preview*, not production. On
+  3 August 2026 a deploy from `codex/website-tracking-repair` silently went to
+  `codex-website-tracking-repai.marketing-dashboard-1d0.pages.dev` while
+  production stayed on the old build.
+- **Cache-bust the verification.** Immediately after a deploy the edge can serve
+  the old and new file to consecutive requests. `curl` the asset with a
+  `?cb=$(date +%s)` query and compare an `md5sum` against
+  `git show <sha>:public/app.js | md5sum`, rather than trusting a single fetch.
+- **`main` is not automatically the source of truth.** Production has been
+  deployed from a working branch before, leaving `main` *behind* what is live.
+  Establish what is actually running by checksum before assuming.
+
+### Migrations that add a column
+
+Adding a column with a `DEFAULT` stamps every existing row with that default. If
+reporting queries filter on the new column, all historical data silently
+disappears the moment the migration runs — this is exactly what happened on
+31 July 2026 (see `WEBSITE-TRACKER.md`). Before deploying such a migration,
+check what the reads will exclude:
+
+```bash
+npx wrangler d1 execute marketing_dashboard --remote \
+  --command "SELECT environment, COUNT(*) FROM website_events GROUP BY environment"
+```
 
 ## Database Migrations
 

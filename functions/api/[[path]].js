@@ -29,6 +29,9 @@ export async function onRequest(context) {
     if (route === "website/consent" && context.request.method === "POST") return websiteConsent(context);
     if (route === "website/stat" && context.request.method === "OPTIONS") return websiteCors(context.request);
     if (route === "website/stat" && context.request.method === "POST") return websiteStat(context);
+    if (route === "website/withdraw" && context.request.method === "OPTIONS") return websiteCors(context.request);
+    if (route === "website/withdraw" && context.request.method === "POST") return websiteWithdraw(context);
+    if (route === "website/ad-click" && context.request.method === "POST") return websiteAdClick(context);
     if (route === "website/outcome-ingest" && context.request.method === "POST") return websiteOutcomeIngest(context);
     if (route === "login" && context.request.method === "POST") return login(context);
     if (route === "logout") return logout(context);
@@ -785,6 +788,46 @@ function websiteRequestEnvironment(request, body, signed) {
   return signed ? websiteEnvironment(websiteText(body.origin, 300)) : "";
 }
 
+/*
+ * Automated-traffic classification at the ingest.
+ *
+ * Defence in depth. The theme already refuses to hand a crawler any endpoints
+ * (`inc/traffic-classification.php`), so in normal operation nothing automated
+ * reaches here at all. This exists because the theme gate can be lost in a
+ * deploy, a stale cached page can carry endpoints a crawler then uses, and the
+ * ingest is the only place that sees every writer.
+ *
+ * KEEP THIS ALIGNED WITH THE PHP LIST. Two copies of a rule drift; when adding
+ * an agent, add it in both. The PHP side is the fuller list and is the one to
+ * copy from.
+ *
+ * `cubot` is stripped before the generic token test because CUBOT is an Android
+ * handset brand — a bare `bot` test silently deletes those owners from the
+ * data. `websiteStatDevice` carried exactly that bug and has been corrected.
+ */
+const WEBSITE_BOT_TOKEN_EXCEPTIONS = /cubot|aboutus|robotics|botswana|abbot|talkbot/g;
+const WEBSITE_BOT_AGENTS = /googlebot|bingbot|msnbot|slurp|duckduckbot|baiduspider|yandex|sogou|exabot|seznambot|petalbot|applebot|qwantbot|coccocbot|ahrefs|semrush|mj12bot|dotbot|rogerbot|blexbot|screaming frog|sitebulb|serpstat|dataforseo|barkrowler|zoominfo|sistrix|majestic|builtwith|wappalyzer|netcraft|gptbot|chatgpt-user|oai-searchbot|ccbot|claudebot|claude-web|anthropic-ai|perplexity|google-extended|bytespider|amazonbot|meta-externalagent|meta-externalfetcher|facebookbot|diffbot|imagesift|omgili|youbot|timpibot|cohere|ai2bot|firecrawl|scrapy|facebookexternalhit|twitterbot|linkedinbot|slackbot|slack-imgproxy|whatsapp|telegrambot|discordbot|pinterest|redditbot|embedly|skypeuripreview|vkshare|tumblr|bitlybot|flipboard|uptimerobot|pingdom|statuscake|site24x7|newrelicpinger|datadog|hetrixtool|betteruptime|freshping|chrome-lighthouse|pagespeed|gtmetrix|webpagetest|ssllabs|qualys|detectify|sucuri|wpscan|headlesschrome|phantomjs|puppeteer|playwright|selenium|webdriver|cypress|jsdom|splash|curl\/|wget|python-requests|python-urllib|aiohttp|go-http-client|okhttp|axios\/|node-fetch|undici|java\/|apache-httpclient|httpclient|guzzlehttp|libwww-perl|mechanize|httpie|postmanruntime|insomnia|restsharp|feedfetcher|feedburner|feedly|inoreader|ia_archiver|archive\.org_bot|wayback|heritrix|commoncrawl/i;
+const WEBSITE_BOT_TOKENS = /(?:bot|crawl(?:er)?|spider|scrape[rd]?)(?:[^a-z0-9]|$)/i;
+
+function isWebsiteBotAgent(userAgent) {
+  const agent = String(userAgent || "").trim().toLowerCase();
+  // A real browser always sends a user agent.
+  if (!agent) return true;
+  if (WEBSITE_BOT_AGENTS.test(agent)) return true;
+  return WEBSITE_BOT_TOKENS.test(agent.replace(WEBSITE_BOT_TOKEN_EXCEPTIONS, ""));
+}
+
+/*
+ * A signed relay is ALWAYS `server`, never bot-classified. The WindowCAD
+ * completion callback and the daily reconciliation arrive from WordPress with a
+ * PHP user agent; running them through the crawler test would classify every
+ * completed quote as automated and silently stop counting leads.
+ */
+function websiteTrafficClass(request, signed) {
+  if (signed) return "server";
+  return isWebsiteBotAgent(request.headers.get("User-Agent")) ? "bot" : "human";
+}
+
 function websiteText(value, limit = 180) {
   return String(value || "").trim().slice(0, limit);
 }
@@ -822,6 +865,17 @@ async function websiteEvent({ request, env }) {
   if (!WEBSITE_EVENT_TYPES.has(event)) return json({ error: "Unsupported website event" }, 400, websiteCorsHeaders(origin));
   if (["form_submitted", "quote_completed"].includes(event) && !signed) {
     return json({ error: "Completed lead events require a signed server relay" }, 403, websiteCorsHeaders(origin));
+  }
+
+  /*
+   * Automated traffic is acknowledged and dropped rather than stored or
+   * refused. Storing it means every reporting query needs a filter and one
+   * forgotten filter puts the inflation back; refusing it with an error would
+   * make a crawler retry. A 200 ends the conversation and writes nothing.
+   */
+  const trafficClass = websiteTrafficClass(request, signed);
+  if (trafficClass === "bot") {
+    return json({ ok: true, ignored: "automated" }, 200, websiteCorsHeaders(origin));
   }
 
   const journeyId = websiteJourneyId(body.journey_id, event === "quote_completed" ? `UNATTRIBUTED-${crypto.randomUUID()}` : "");
@@ -871,22 +925,24 @@ async function websiteEvent({ request, env }) {
 
   if (data.visitorId) {
     await env.DB.prepare(`
-      INSERT INTO website_visitors (visitor_id, first_seen_at, last_seen_at, first_landing_path, first_source, first_medium, first_campaign, first_content, first_term, first_referrer_host, environment)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO website_visitors (visitor_id, first_seen_at, last_seen_at, first_landing_path, first_source, first_medium, first_campaign, first_content, first_term, first_referrer_host, environment, traffic_class)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(visitor_id) DO UPDATE SET
         last_seen_at = excluded.last_seen_at,
-        environment = CASE WHEN website_visitors.environment = 'legacy' THEN excluded.environment ELSE website_visitors.environment END
+        environment = CASE WHEN website_visitors.environment = 'legacy' THEN excluded.environment ELSE website_visitors.environment END,
+        traffic_class = CASE WHEN website_visitors.traffic_class IN ('unclassified', 'no_signal') THEN excluded.traffic_class ELSE website_visitors.traffic_class END
     `).bind(
       data.visitorId, data.occurredAt, data.occurredAt, data.landingPath, data.source, data.medium,
-      data.campaign, data.content, data.term, data.referrerHost, environment
+      data.campaign, data.content, data.term, data.referrerHost, environment, trafficClass
     ).run();
   }
 
   await env.DB.prepare(`
-    INSERT INTO website_journeys (journey_id, visitor_id, first_event_at, last_event_at, landing_path, source, medium, campaign, content, term, referrer_host, environment)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO website_journeys (journey_id, visitor_id, first_event_at, last_event_at, landing_path, source, medium, campaign, content, term, referrer_host, environment, traffic_class)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(journey_id) DO UPDATE SET
       last_event_at = excluded.last_event_at,
+      traffic_class = CASE WHEN website_journeys.traffic_class IN ('unclassified', 'no_signal') THEN excluded.traffic_class ELSE website_journeys.traffic_class END,
       visitor_id = CASE WHEN website_journeys.visitor_id = '' THEN excluded.visitor_id ELSE website_journeys.visitor_id END,
       landing_path = CASE WHEN website_journeys.landing_path = '' THEN excluded.landing_path ELSE website_journeys.landing_path END,
       source = CASE WHEN website_journeys.source = '' THEN excluded.source ELSE website_journeys.source END,
@@ -898,16 +954,16 @@ async function websiteEvent({ request, env }) {
       environment = CASE WHEN website_journeys.environment = 'legacy' THEN excluded.environment ELSE website_journeys.environment END
   `).bind(
     data.journeyId, data.visitorId, data.occurredAt, data.occurredAt, data.landingPath, data.source, data.medium,
-    data.campaign, data.content, data.term, data.referrerHost, environment
+    data.campaign, data.content, data.term, data.referrerHost, environment, trafficClass
   ).run();
 
   await env.DB.prepare(`
-    INSERT INTO website_events (id, journey_id, event_type, occurred_at, page_path, cta, link_target, page_duration_seconds, product_collection, price_amount, price_currency, event_value, environment)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO website_events (id, journey_id, event_type, occurred_at, page_path, cta, link_target, page_duration_seconds, product_collection, price_amount, price_currency, event_value, environment, traffic_class)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     eventId, data.journeyId, data.event, data.occurredAt, data.pagePath, data.cta,
     data.linkTarget, data.pageDurationSeconds, data.productCollection, data.priceAmount, data.priceCurrency, data.eventValue,
-    environment
+    environment, trafficClass
   ).run();
 
   return json({ ok: true, journey_id: data.journeyId }, 201, websiteCorsHeaders(origin));
@@ -917,6 +973,18 @@ async function websiteConsent({ request, env }) {
   const origin = request.headers.get("Origin") || "";
   const environment = websiteEnvironment(origin);
   if (!environment) return json({ error: "Untrusted consent event" }, 403);
+
+  /*
+   * Crawlers are why `banner_shown` could never be used as a denominator: it
+   * read 1,120 against 152 real choices in the launch audit, and 466 in one day
+   * on 3 August 2026 against 35. With automated traffic dropped here and the
+   * modal no longer opening for it in the theme, the figure means first visits
+   * again.
+   */
+  if (websiteTrafficClass(request, false) === "bot") {
+    return json({ ok: true, ignored: "automated" }, 200, websiteCorsHeaders(origin));
+  }
+
   const body = await request.json().catch(() => ({}));
   const choice = websiteText(body.choice, 24);
   const column = {
@@ -945,7 +1013,14 @@ function websiteStatPath(value) {
 function websiteStatDevice(value, userAgent = "") {
   const requested = websiteText(value, 16).toLowerCase();
   if (requested === "server") return "server";
-  if (/bot|crawler|spider|headless|preview|lighthouse|pagespeed/i.test(userAgent)) return "bot";
+  /*
+   * Was `/bot|crawler|spider|headless|preview|lighthouse|pagespeed/i`, which
+   * matched CUBOT_X30 — an Android handset — and filed every Cubot owner as a
+   * crawler. It also matched any agent containing "preview". Now shares the one
+   * classifier so the aggregate table and the journey tables agree about what a
+   * bot is.
+   */
+  if (isWebsiteBotAgent(userAgent)) return "bot";
   if (["mobile", "tablet", "desktop"].includes(requested)) return requested;
   return /tablet|ipad/i.test(userAgent) ? "tablet" : /mobi|android/i.test(userAgent) ? "mobile" : "desktop";
 }
@@ -1002,6 +1077,163 @@ async function websiteStat({ request, env }) {
   `).bind(environment, day, hourUtc, event, pagePath, referrerHost, deviceType).run();
 
   return json({ ok: true }, 201, websiteCorsHeaders(origin));
+}
+
+function websiteAttributionRef(value) {
+  const id = websiteText(value, 96).toUpperCase();
+  return /^FGA-[A-Z0-9-]{8,80}$/.test(id) ? id : "";
+}
+
+/*
+ * The consent-free ad click log.
+ *
+ * A Google Ads click arrives with its campaign in the landing URL. Recording
+ * that arrival stores nothing on anybody's device, so it needs no consent and
+ * survives a visitor who refuses cookies or never answers the banner. This is
+ * what keeps cost-per-lead per campaign measurable — the number that decides
+ * where the budget goes — when the journey tables cannot see most traffic.
+ *
+ * THE CLICK ID IS NEVER SENT HERE. WordPress hashes it before relaying, per the
+ * standing rule that ad click IDs never enter this dashboard. `click_hash` only
+ * exists so reloading a landing page is not counted as a second click.
+ *
+ * Signed relay only: this is written by the theme server-side, never by a page.
+ */
+async function websiteAdClick({ request, env }) {
+  const signed = signedWebsiteRequest(request, env);
+  if (!signed) return json({ error: "Ad clicks require a signed server relay" }, 403);
+
+  const body = await request.json().catch(() => ({}));
+  const environment = websiteEnvironment(websiteText(body.origin, 300));
+  if (!environment) return json({ error: "Untrusted ad click" }, 403);
+
+  const clickHash = websiteText(body.click_hash, 64);
+  if (!/^[a-f0-9]{32,64}$/.test(clickHash)) {
+    return json({ error: "A hashed click reference is required" }, 400);
+  }
+
+  // Outcome mode: a lead landed and carries the visit's attribution reference,
+  // so the click that produced it gets its result attached.
+  const outcome = websiteText(body.outcome, 32);
+  if (outcome) {
+    if (!["form_submitted", "quote_completed"].includes(outcome)) {
+      return json({ error: "Unsupported ad click outcome" }, 400);
+    }
+    await env.DB.prepare(`
+      UPDATE website_ad_clicks
+      SET outcome = ?, outcome_at = ?, outcome_value = ?
+      WHERE click_hash = ? AND environment = ? AND outcome = ''
+    `).bind(
+      outcome,
+      new Date().toISOString(),
+      websiteNumber(body.outcome_value),
+      clickHash,
+      environment
+    ).run();
+
+    return json({ ok: true, outcome });
+  }
+
+  const occurredAt = (() => {
+    const requested = Date.parse(websiteText(body.occurred_at, 40));
+    const now = Date.now();
+    return Number.isFinite(requested) && requested <= now + 300000 && requested >= now - (2 * 365 * 86400000)
+      ? new Date(requested).toISOString()
+      : new Date(now).toISOString();
+  })();
+
+  // INSERT OR IGNORE, because one click is one row however many times the
+  // visitor reloads or navigates back to the landing page.
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO website_ad_clicks
+      (click_hash, click_type, environment, occurred_at, landing_path, source, medium,
+       campaign, content, term, ad_group, device_type, traffic_class, attribution_ref)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    clickHash,
+    websiteText(body.click_type, 16),
+    environment,
+    occurredAt,
+    websiteStatPath(body.landing_path),
+    websiteText(body.source, 120),
+    websiteText(body.medium, 120),
+    websiteText(body.campaign, 180),
+    websiteText(body.content, 180),
+    websiteText(body.term, 180),
+    websiteText(body.ad_group, 120),
+    websiteText(body.device_type, 16),
+    websiteText(body.traffic_class, 16) || "human",
+    websiteAttributionRef(body.attribution_ref)
+  ).run();
+
+  return json({ ok: true });
+}
+
+/*
+ * Consent withdrawal.
+ *
+ * Until now a refusal cleared the visitor's own browser storage and reloaded
+ * the page, and that was all — the visitor row, the journey and the page views
+ * already relayed stayed in this database with nothing to remove them. Under
+ * the previous granted-by-default model those rows were created before the
+ * banner had even rendered, so somebody who pressed "Use necessary only" was
+ * still recorded as a consented visitor. That is the fault this closes.
+ *
+ * Authorisation is possession of the identifiers, which is the same model the
+ * rest of the tracker uses: they are opaque random values known only to the
+ * browser holding them, and the only thing they can do here is delete their
+ * own rows.
+ */
+async function websiteWithdraw({ request, env }) {
+  const origin = request.headers.get("Origin") || "";
+  const environment = websiteEnvironment(origin);
+  if (!environment) return json({ error: "Untrusted withdrawal" }, 403);
+
+  const body = await request.json().catch(() => ({}));
+  const journeyId = websiteJourneyId(body.journey_id);
+  const visitorId = websiteVisitorId(body.visitor_id);
+  if (!journeyId && !visitorId) {
+    return json({ error: "A journey or visitor reference is required" }, 400, websiteCorsHeaders(origin));
+  }
+
+  // Every journey belonging to the visitor, not only the one in front of us:
+  // withdrawing consent withdraws it for the browser, not for the tab.
+  const journeys = new Set();
+  if (journeyId) journeys.add(journeyId);
+  if (visitorId) {
+    const owned = await env.DB.prepare(
+      "SELECT journey_id FROM website_journeys WHERE visitor_id = ? AND environment = ?"
+    ).bind(visitorId, environment).all();
+    for (const row of owned.results || []) journeys.add(row.journey_id);
+  }
+
+  let removedEvents = 0;
+  for (const id of journeys) {
+    const events = await env.DB.prepare(
+      "DELETE FROM website_events WHERE journey_id = ?"
+    ).bind(id).run();
+    removedEvents += Number(events.meta?.changes || 0);
+
+    await env.DB.prepare("DELETE FROM website_chat_messages WHERE journey_id = ?").bind(id).run();
+    await env.DB.prepare("DELETE FROM website_journeys WHERE journey_id = ?").bind(id).run();
+  }
+
+  if (visitorId) {
+    await env.DB.prepare("DELETE FROM website_chat_messages WHERE visitor_id = ?").bind(visitorId).run();
+    await env.DB.prepare("DELETE FROM website_visitors WHERE visitor_id = ?").bind(visitorId).run();
+  }
+
+  /*
+   * The aggregate statistical table is deliberately NOT touched. It holds
+   * hourly counts with no visitor, journey or device identifier in them, so
+   * there is nothing in it that belongs to this person and no row that could be
+   * decremented without corrupting a total that is not about them.
+   */
+  return json({
+    ok: true,
+    journeys_removed: journeys.size,
+    events_removed: removedEvents
+  }, 200, websiteCorsHeaders(origin));
 }
 
 function websiteChatId(value) {
@@ -1222,6 +1454,40 @@ async function fensterWebsiteState(env, request) {
     WHERE occurred_at >= ? AND event_type = 'quote_opened' AND environment IN ('production','legacy')
   `).bind(since).first();
 
+  /*
+   * AUTOMATED TRAFFIC IS FILTERED AT THE WRITE BOUNDARY, NOT HERE.
+   *
+   * `websiteEvent` drops a crawler before it writes anything, so no bot row
+   * exists to exclude and none of the 33 reporting filters above needs a second
+   * condition. That is deliberate: the 31 July 2026 blackout happened precisely
+   * because a rule had to be repeated in 32 read sites and one change broke all
+   * of them at once. Filter once, where the data enters.
+   *
+   * These two reads exist so the cleanup is visible rather than assumed.
+   * `traffic_class` on old rows is 'unclassified' -- the user agent was never
+   * stored, so those genuinely cannot be resolved and must not be reported as
+   * human. 'no_signal' marks a pre-fix journey that recorded no engagement and
+   * lasted zero seconds: evidence of absence, not a verdict.
+   */
+  const [integrity, adClicks] = await Promise.all([
+    env.DB.prepare(`
+      SELECT traffic_class, COUNT(*) AS count FROM website_journeys
+      WHERE first_event_at >= ? AND environment IN ('production','legacy')
+      GROUP BY traffic_class
+    `).bind(since).all(),
+    env.DB.prepare(`
+      SELECT
+        COALESCE(campaign, '') AS campaign,
+        COUNT(*) AS clicks,
+        SUM(CASE WHEN outcome <> '' THEN 1 ELSE 0 END) AS leads,
+        SUM(CASE WHEN outcome = 'quote_completed' THEN 1 ELSE 0 END) AS quotes,
+        SUM(CASE WHEN outcome = 'form_submitted' THEN 1 ELSE 0 END) AS forms
+      FROM website_ad_clicks
+      WHERE occurred_at >= ? AND environment IN ('production','legacy') AND traffic_class <> 'bot'
+      GROUP BY campaign ORDER BY clicks DESC LIMIT 40
+    `).bind(since).all()
+  ]);
+
   const sinceDay = since.slice(0, 10);
   const [dailyEvents, dailyStat, consentDaily, topPages, statTopPages, deviceSplit, topCtas, formFields, products] = await Promise.all([
     env.DB.prepare(`
@@ -1308,6 +1574,15 @@ async function fensterWebsiteState(env, request) {
       allOptional: Number(consent?.all_optional || 0)
     },
     outcomes: Object.fromEntries((outcomes.results || []).map((row) => [row.status, Number(row.count || 0)])),
+    // How much of the period's data is trustworthy, and why. See the comment on
+    // the query: automated traffic is dropped at ingest, so 'bot' should read
+    // zero going forward and anything before the fix reads 'unclassified'.
+    integrity: Object.fromEntries(
+      (integrity.results || []).map((row) => [row.traffic_class || "unclassified", Number(row.count || 0)])
+    ),
+    // Consent-free ad attribution: campaign-level clicks and the leads they
+    // produced, which survives a visitor who refuses or never answers.
+    adClicks: adClicks.results || [],
     series: {
       events: dailyEvents.results || [],
       statistical: dailyStat.results || [],

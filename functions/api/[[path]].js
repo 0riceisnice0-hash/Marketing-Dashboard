@@ -730,6 +730,14 @@ const WEBSITE_EVENT_TYPES = new Set([
 
 // This endpoint is deliberately aggregate-only. It accepts no visitor or
 // journey identifier and stores only hourly buckets for statistical purposes.
+//
+// THIS LIST IS WHAT MAKES "THE TOTALS ARE COMPLETE" TRUE OR FALSE, so it has to
+// match what the theme actually sends. Under consent-first the journey tables
+// only ever see consenting visitors, and this path is the only thing that
+// counts everybody. Anything the theme sends but this rejects is silently
+// consenter-only, which is exactly the half-truth the tracker was rebuilt to
+// stop: `cta_click`, `chat_opened`, `link_click` and `form_validation_error`
+// were all being dropped here until 2026-08-12.
 const WEBSITE_STAT_TYPES = new Set([
   "page_view",
   "page_engaged",
@@ -739,9 +747,20 @@ const WEBSITE_STAT_TYPES = new Set([
   "form_submitted",
   "phone_click",
   "email_click",
+  // Counts only. The aggregate table has no column for a CTA label or a link
+  // target, so what survives is "how many", not "which one" -- which is the
+  // right trade, because "how many" is the number that has to be true.
+  "cta_click",
+  "link_click",
+  "chat_opened",
+  "form_validation_error",
   // Server-relayed total for WindowCAD completions that arrive without a
   // consented FG2 reference. Aggregate count only; no journey is created.
   "quote_completed"
+  // Deliberately absent: `visitor_seen`, which is a statement about identity
+  // and means nothing without one, and `scroll_depth`, which fires four times
+  // per page and would cost far more rows than the count is worth. Scroll is
+  // still gated at its caller in the theme.
 ]);
 
 function websiteCors(request) {
@@ -1443,6 +1462,8 @@ async function fensterWebsiteState(env, request) {
         COALESCE(SUM(CASE WHEN event_type = 'form_started' THEN count ELSE 0 END), 0) AS form_starts,
         COALESCE(SUM(CASE WHEN event_type = 'form_submitted' THEN count ELSE 0 END), 0) AS forms,
         COALESCE(SUM(CASE WHEN event_type IN ('phone_click', 'email_click') THEN count ELSE 0 END), 0) AS contact_clicks,
+        COALESCE(SUM(CASE WHEN event_type = 'cta_click' THEN count ELSE 0 END), 0) AS cta_clicks,
+        COALESCE(SUM(CASE WHEN event_type = 'page_engaged' THEN count ELSE 0 END), 0) AS engaged,
         COALESCE(SUM(CASE WHEN event_type = 'quote_completed' THEN count ELSE 0 END), 0) AS quote_completions
       FROM (SELECT environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate_v2 UNION ALL SELECT 'production' AS environment, day, hour_utc, event_type, page_path, referrer_host, device_type, count FROM website_statistical_aggregate) AS agg
       WHERE day >= ? AND device_type <> 'bot' AND environment IN ('production','legacy')
@@ -1550,6 +1571,7 @@ async function fensterWebsiteState(env, request) {
     formStarts: totals.form_started || 0,
     formErrors: totals.form_validation_error || 0,
     ctaClicks: totals.cta_click || 0,
+    pageEngagements: totals.page_engaged || 0,
     scrollDepths: totals.scroll_depth || 0,
     quotes: totals.quote_completed || 0,
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
@@ -1564,6 +1586,8 @@ async function fensterWebsiteState(env, request) {
       formStarts: Number(statistical?.form_starts || 0),
       forms: Number(statistical?.forms || 0),
       contactClicks: Number(statistical?.contact_clicks || 0),
+      ctaClicks: Number(statistical?.cta_clicks || 0),
+      engaged: Number(statistical?.engaged || 0),
       quoteCompletions: Number(statistical?.quote_completions || 0)
     },
     consent: {

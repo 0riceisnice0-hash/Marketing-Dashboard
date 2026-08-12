@@ -3339,3 +3339,123 @@ dialog::backdrop {
     width: 100%;
   }
 }
+
+/* ---------- complete totals ("everyone") ----------
+   The confident block on the Overview. It is styled deliberately heavier than
+   the coverage note beneath it, because the totals are the trustworthy number
+   and the consent split is a caveat about detail, not about volume. The old
+   layout inverted that and opened on "35% attributable", which read as though
+   most of the data were missing when none of it is. */
+
+.fw-everyone {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--fw-ring);
+  border-radius: var(--fw-radius);
+  background:
+    radial-gradient(120% 140% at 0% 0%, #f2fbf7 0%, rgba(255, 255, 255, 0) 55%),
+    var(--fw-surface);
+  box-shadow: var(--shadow-small);
+  overflow: hidden;
+}
+
+.fw-everyone::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--green), #42b5d7 55%, var(--blue));
+}
+
+.fw-everyone__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.fw-everyone__eyebrow {
+  margin: 0 0 2px;
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--fw-muted);
+}
+
+.fw-everyone__head h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: var(--fw-ink);
+}
+
+.fw-everyone__badge {
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(41, 169, 99, .10);
+  color: #16794a;
+  font-size: .72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.fw-everyone__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 10px;
+}
+
+.fw-everyone__cell {
+  display: grid;
+  gap: 2px;
+  padding: 13px 14px;
+  border: 1px solid var(--fw-grid);
+  border-radius: 11px;
+  background: var(--fw-plane);
+}
+
+.fw-everyone__cell strong {
+  font-size: 1.55rem;
+  line-height: 1.1;
+  color: #133f58;
+  font-variant-numeric: tabular-nums;
+}
+
+.fw-everyone__cell span {
+  font-size: .76rem;
+  font-weight: 700;
+  color: var(--fw-ink-2);
+}
+
+.fw-everyone__note {
+  margin: 0;
+  font-size: .82rem;
+  line-height: 1.55;
+  color: var(--fw-ink-2);
+}
+
+.fw-tag {
+  margin-left: 8px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(30, 111, 146, .10);
+  color: var(--blue-dark);
+  font-size: .66rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.fw-muted {
+  color: var(--fw-muted);
+}
+
+@media (max-width: 640px) {
+  .fw-everyone { padding: 16px; }
+  .fw-everyone__cell strong { font-size: 1.35rem; }
+  .fw-everyone__grid { grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); }
+}

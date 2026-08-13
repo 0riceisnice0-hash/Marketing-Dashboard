@@ -2005,151 +2005,22 @@ function wtOverview() {
     [totalForms, "Forms sent", `${wtFmt(totalForms ? (s.formStarts || 0) + (stat.formStarts || 0) : 0)} started`],
     [Number(s.quoteJourneys || 0) + Number(stat.quoteStarts || 0), "Quote starts", "deliberate opens"],
     [Number(s.calls || 0) + Number(stat.contactClicks || 0), "Phone / email clicks", "intent only, not answered calls"],
-    [Number(s.ctaClicks || 0) + Number(stat.ctaClicks || 0), "CTA clicks", "commercial buttons pressed"],
+    [s.uniqueVisitors, "Consented visitors", `${wtFmt(s.journeys)} journeys`],
     [s.legendChats, "Legend chats", "saved for 30-day QA"],
     [s.outcomes?.won || 0, "Won leads", "marked by the office"]
   ];
   return `
+    ${wtCoverage()}
     ${wtTrackingAlert()}
-    ${wtEveryone()}
     <div class="wt-kpis">${kpis.map(([value, label, hint], index) => `
       <article class="wt-kpi ${index === 0 ? "wt-kpi--lead" : ""}"><strong>${wtFmt(value)}</strong><span>${label}</span><small>${hint}</small></article>
     `).join("")}</div>
-    ${wtCampaigns()}
     ${wtTrend()}
     <div class="wt-grid wt-grid--two">
       ${wtFunnel()}
       ${wtConsent()}
     </div>
-    ${wtCoverage()}
     ${wtDecision()}
-  `;
-}
-
-/*
- * THE HEADLINE IS THE COMPLETE NUMBER, AND THAT IS THE WHOLE POINT OF THIS
- * PANEL.
- *
- * Under consent-first the journey tables only ever contain visitors who pressed
- * a button, so leading with them makes a real business look half its size and
- * reads as though the data cannot be trusted. It can. Every meaningful action is
- * ALSO counted anonymously for visitors who refuse or never answer, so the
- * totals below cover 100% of human traffic. What consent buys is not volume, it
- * is the sequence: which pages one person saw, in what order, on the way to a
- * quote.
- *
- * So: totals first and unqualified, detail second and clearly labelled as a
- * subset. The previous layout did the opposite and opened on "35% of page views
- * are attributable", which is true and was the first thing anybody read.
- */
-function wtEveryone() {
-  const s = websiteState;
-  const stat = s.statistical || {};
-
-  const consentedViews = (s.series?.events || [])
-    .reduce((total, row) => total + Number(row.page_views || 0), 0);
-  const totals = {
-    views: consentedViews + Number(stat.pageViews || 0),
-    engaged: Number(s.pageEngagements || 0) + Number(stat.engaged || 0),
-    quoteStarts: Number(s.quoteJourneys || 0) + Number(stat.quoteStarts || 0),
-    formStarts: Number(s.formStarts || 0) + Number(stat.formStarts || 0),
-    leads: Number(s.quotes || 0) + Number(s.forms || 0)
-      + Number(stat.quoteCompletions || 0) + Number(stat.forms || 0),
-    contact: Number(s.calls || 0) + Number(stat.contactClicks || 0),
-  };
-
-  if (!totals.views) {
-    return `
-      <div class="fw-empty">
-        <strong>No traffic recorded yet for this period</strong>
-        <span>Totals appear here as soon as the website reports its first visit.</span>
-      </div>
-    `;
-  }
-
-  const cells = [
-    [totals.views, "Page views"],
-    [totals.engaged, "Engaged views"],
-    [totals.quoteStarts, "Quote tool opened"],
-    [totals.formStarts, "Forms started"],
-    [totals.contact, "Phone / email taps"],
-    [totals.leads, "Leads"],
-  ];
-
-  return `
-    <section class="fw-everyone">
-      <header class="fw-everyone__head">
-        <div>
-          <p class="fw-everyone__eyebrow">Everyone who visited</p>
-          <h3>Complete totals</h3>
-        </div>
-        <span class="fw-everyone__badge">100% of human traffic</span>
-      </header>
-      <div class="fw-everyone__grid">
-        ${cells.map(([value, label]) => `
-          <article class="fw-everyone__cell">
-            <strong>${wtFmt(value)}</strong>
-            <span>${label}</span>
-          </article>
-        `).join("")}
-      </div>
-      <p class="fw-everyone__note">
-        Counted for every visitor, whether or not they accepted cookies, and with
-        automated traffic removed. Consent decides whether we can follow one
-        person's route through the site &mdash; it does not decide whether they
-        are counted.
-      </p>
-    </section>
-  `;
-}
-
-/*
- * Paid performance, and the only panel here that is complete for ads.
- *
- * The click is read from the landing URL, so it needs no consent and does not
- * depend on the visitor answering the banner. If every campaign reads
- * "Not tagged", the Final URL suffix is missing in the Google Ads account --
- * nothing here can recover a campaign name that was never sent.
- */
-function wtCampaigns() {
-  const rows = (websiteState.adClicks || []).filter((row) => Number(row.clicks || 0) > 0);
-  if (!rows.length) {
-    return `
-      <section class="wt-panel">
-        <h3>Paid campaigns</h3>
-        <div class="fw-empty">
-          <strong>No ad clicks recorded in this period</strong>
-          <span>Clicks appear here automatically. If paid traffic is running and this stays empty, check the Final URL suffix in Google Ads.</span>
-        </div>
-      </section>
-    `;
-  }
-
-  const untagged = rows.filter((row) => !row.campaign).length;
-  return `
-    <section class="wt-panel">
-      <h3>Paid campaigns <small class="fw-tag">no consent needed</small></h3>
-      <table class="wt-table">
-        <thead><tr><th>Campaign</th><th>Clicks</th><th>Leads</th><th>Quotes</th><th>Forms</th><th>Per lead</th></tr></thead>
-        <tbody>
-          ${rows.map((row) => {
-            const clicks = Number(row.clicks || 0);
-            const leads = Number(row.leads || 0);
-            return `
-              <tr>
-                <td>${row.campaign ? escapeHtml(row.campaign) : '<em class="fw-muted">Not tagged</em>'}</td>
-                <td>${wtFmt(clicks)}</td>
-                <td><b>${wtFmt(leads)}</b></td>
-                <td>${wtFmt(row.quotes || 0)}</td>
-                <td>${wtFmt(row.forms || 0)}</td>
-                <td>${leads ? `${(clicks / leads).toFixed(1)} clicks` : "&mdash;"}</td>
-              </tr>
-            `;
-          }).join("")}
-        </tbody>
-      </table>
-      ${untagged ? `<p class="fw-everyone__note">${untagged} campaign row${untagged === 1 ? " has" : "s have"} no name, which means the Google Ads Final URL suffix is not set on that campaign. The clicks are still counted; only the campaign name is missing.</p>` : ""}
-    </section>
   `;
 }
 
@@ -2195,28 +2066,23 @@ function wtCoverage() {
     `;
   }
 
-  const integrity = websiteState.integrity || {};
-  const unresolved = Number(integrity.unclassified || 0) + Number(integrity.no_signal || 0);
-
   return `
     <section class="fw-coverage">
       <div class="fw-coverage__head">
-        <strong>Journey detail available for ${consentedShare}% of visits</strong>
+        <strong>${consentedShare}% of page views are attributable</strong>
         <span>${wtFmt(decisions)} cookie choices recorded over ${websiteState.periodDays || 30} days</span>
       </div>
       <div class="fw-coverage__bar" role="img"
-        aria-label="${wtFmt(consentedViews)} visits with a timeline and ${wtFmt(anonymousViews)} counted anonymously">
+        aria-label="${wtFmt(consentedViews)} consented page views and ${wtFmt(anonymousViews)} anonymous page views">
         <i style="width:${consentedShare}%"></i><i style="width:${100 - consentedShare}%"></i>
       </div>
       <p class="fw-coverage__note">
-        <b>This is not a gap in the totals above.</b> All ${wtFmt(totalViews)} page views are
-        counted. What this bar shows is how many carry a <em>timeline</em>: the
-        ${wtFmt(consentedViews)} visits from people who accepted analytics have a visitor ID,
-        a traffic source and a page-by-page route, and the other ${wtFmt(anonymousViews)} are
-        counted without one. Everything labelled &ldquo;consented&rdquo; below &mdash; Visitors,
-        journeys, individual timelines &mdash; is drawn from that share.
+        <b>${wtFmt(consentedViews)}</b> page views came from visitors who accepted analytics
+        (${consentedShare}%), and <b>${wtFmt(anonymousViews)}</b> from visitors who did not.
+        Only the consented share has a visitor ID, a journey, a traffic source or a timeline &mdash;
+        everything below headed &ldquo;consented&rdquo; is drawn from that share alone,
+        not from all of your traffic.
       </p>
-      ${unresolved ? `<p class="fw-coverage__note fw-muted">${wtFmt(unresolved)} journeys in this period predate automated-traffic filtering and cannot be resolved retrospectively, because the user agent was never stored. Do not read them as human.</p>` : ""}
     </section>
   `;
 }

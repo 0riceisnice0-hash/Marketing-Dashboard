@@ -14,159 +14,34 @@ Use it to answer practical marketing questions:
 
 Names, emails, phone numbers, addresses, quote details and other customer-entered data stay in WordPress/AdminBase. Do not paste them into this dashboard.
 
-## Two independent layers, and knowing which is which explains everything
-
-Since August 2026 the tracker is deliberately built in two layers that answer
-different questions and obey different rules. Almost every confusion about these
-numbers comes from treating them as one system.
-
-**Layer 1 — ad attribution. No consent required, because nothing is stored on
-the visitor's device.** A Google Ads click arrives with its campaign in the
-landing URL. Reading the address of a page somebody just requested stores
-nothing, so it needs no permission. This is what keeps **cost per lead per
-campaign** measurable, and it works for every paid visitor including the ones
-who refuse cookies or never answer the banner.
-
-**Layer 2 — journey tracking. Consent required, because it persists.** `FGV`,
-`FG2`, page timelines, scroll depth, returning-visitor recognition, Clarity,
-GTM, Meta. None of it starts until the visitor presses a button.
-
-So the honest summary of what each layer can tell you:
-
-| Question | Layer | Available without consent? |
-| --- | --- | --- |
-| Which campaign produced this lead, at what cost | 1 | **Yes** |
-| Which landing page the click hit | 1 | **Yes** |
-| Whether that visit ended in a form or a quote | 1 | **Yes** |
-| What pages they read, and for how long | 2 | No |
-| Clicked Monday, converted Thursday | 2 | No |
-| Google's own conversion column and Smart Bidding | 2 | No |
-
 ## The data flow
 
-1. **A paid click lands.** WordPress reads the `gclid`/`gbraid`/`wbraid` and the
-   UTM suffix out of the URL server-side, records the click, and derives an
-   opaque `FGA-...` reference from it. Nothing is written to the device.
-2. **The visitor chooses.** Until they press a button, no identifier exists, no
-   page view is recorded to the journey tables and no third-party tag loads.
-   Refusing or ignoring the banner leaves them on the aggregate-only path.
-3. **If they accept analytics**, the website creates an opaque browser visitor ID
-   (`FGV-...`) and journey ID (`FG2-...`). The visitor ID lasts up to 90 days;
-   the journey rotates after 30 minutes without a tracked action.
-4. **The quote tool** is stamped with the best reference available: the `FG2` if
-   they consented, otherwise the `FGA` if they arrived from an ad, otherwise a
-   marker saying which. WindowCAD saves it in its separate **Tracking** field.
-   Its office-owned **Reference** field is never touched.
-5. **A completed quote or a sent form** relays back. A consented one joins its
-   journey; any one carrying an `FGA` also attaches its result to the ad click
-   that produced it, whether or not consent was given.
+1. A visitor accepts analytics cookies. The website creates an opaque browser visitor ID (`FGV-...`) and session/journey ID (`FG2-...`). The visitor ID lasts up to 90 days; the journey rotates after 30 minutes without a tracked action.
+2. The website sends consented, non-PII activity to the dashboard: pages, active time, scroll depth and meaningful actions.
+3. When the quote tool opens, the site adds the `FG2-...` value to the WindowCAD URL's **tracking** parameter.
+4. WindowCAD saves that value in its separate **Tracking** field. Its office-owned **Reference** field must remain untouched.
+5. When WindowCAD posts a completed quote back to WordPress, WordPress relays only the opaque `FG2-...` completion to the dashboard. The dashboard attaches it to the matching visitor journey.
+
+The join is deliberately two IDs:
 
 | Value | Meaning | Where it appears |
 | --- | --- | --- |
 | `FGV-...` | Anonymous, consented browser visitor | Customer database and visitor timelines |
 | `FG2-...` | Anonymous, consented journey/WindowCAD quote reference | Journey events and WindowCAD Tracking field |
-| `FGA-...` | **Consent-free** ad reference, derived one-way from the click id in the landing URL | WindowCAD, WordPress and the ad click log. Never creates a dashboard journey |
-| `rejected-cookies` | A quote was created after the visitor refused | WindowCAD only; never joined to a journey |
-| `cookie-consent-not-accepted` | A quote was created before any choice was made | WindowCAD only; never joined to a journey |
+| `FGA-...` | Marketing-only attribution reference when analytics consent is off | WindowCAD and WordPress only; never creates a dashboard journey |
+| `rejected-cookies` | A quote was created after optional-cookie rejection | WindowCAD only; never joined to a dashboard journey |
+| `cookie-consent-not-accepted` | A quote was created before a cookie choice | WindowCAD only; never joined to a dashboard journey |
 
 An `FG2` is not expected to equal the visitor's `FGV`: it is the reference that lets the dashboard say “this visitor completed this WindowCAD quote.” One visitor can have multiple 30-minute journeys and more than one quote submission.
 
-**`FGA` cannot be reversed into a click id.** It is an HMAC of the
-`gclid`/`gbraid`/`wbraid` under a server-side salt, and the dashboard receives a
-*separately salted* hash for deduplication. The raw click id stays in WordPress,
-where the offline conversion feed needs it. The standing rule that ad click ids
-never enter this dashboard or AdminBase is unchanged.
-
-**Known limit of the consent-free join, stated so it is not discovered later.**
-The `FGA` reference is derived from the URL, so it lasts as long as that URL is
-the page being viewed. A visitor who lands from an ad and converts **on that
-page** is joined — the normal path, since every ad points at a product page
-carrying both the quote embed and the enquiry form. Somebody who navigates away
-first and converts two pages later is not: their lead reports as unattributed
-while their click is still counted. **Paid cost per lead is therefore slightly
-conservative, never inflated.**
-
-## Automated traffic
-
-Until August 2026 nothing anywhere classified crawlers. There was no user-agent
-check in the theme and none at the ingest, so any bot that executes JavaScript
-became a real visitor with a real journey and a real page view. The fingerprint
-was in the data and had been read as noise: **1,120 banner impressions against
-152 real choices** in the launch audit, and 466 impressions in one day on 3
-August 2026 against 35 choices.
-
-It is now filtered in two places:
-
-- **The theme refuses to hand a crawler any endpoints** (`inc/traffic-classification.php`).
-  Every sender bails when its endpoint is empty, so one gate disables page
-  views, journeys, aggregate statistics, the chat relay and the banner
-  impression at once. The consent modal is not shown to a crawler either.
-- **The ingest drops them again** as defence in depth, and acknowledges rather
-  than refuses, so nothing retries.
-
-**Filtering happens at the write boundary, not in the reporting queries.** That
-is deliberate. The 31 July blackout below happened precisely because one rule had
-to be repeated in 32 read sites; filter once, where data enters. Reports
-therefore need no bot clause, and `traffic_class` on new rows should never read
-`bot`.
-
-`traffic_class` values: `human`, `bot`, `server` (a signed relay — the WindowCAD
-callback and the daily reconciliation are never browsers), `unclassified`
-(written before the fix; the user agent was never stored, so these genuinely
-cannot be resolved and **must not be reported as human**), and `no_signal` (a
-pre-fix journey that recorded no engagement at all and lasted zero seconds —
-evidence of absence, not a verdict).
-
-**What this does not catch:** a scraper sending a real browser's user agent is
-indistinguishable and is still counted. Catching those needs reverse-DNS
-verification or behavioural scoring, neither worth its cost at this volume. The
-bulk of the inflation was honest crawlers that identify themselves.
-
 ## Consent, identity and privacy
 
-**The model is consent-first as of August 2026.** Nothing optional runs until the
-visitor presses a button. This replaced a granted-by-default model that had two
-faults worth remembering, because both were invisible from the dashboard:
-
-- **Identifiers were issued on the first paint, before the banner had rendered**,
-  and nothing ever retracted them. Somebody who then pressed *Use necessary only*
-  had already been written to this database as a consented visitor. Their refusal
-  worked going forward and did nothing about what was already recorded.
-- **A stored record could not distinguish "agreed" from "never asked."** The
-  `chosen` field existed, was set on the default, was never written when anybody
-  actually clicked, and was read by nothing. So the question "how many people
-  really consented?" had no answer in the data.
-
-Both are closed. `chosen` is now written only by a button press and is required
-for a record to count as consent — which means records from the default-on period
-are invalid and those visitors are asked once more. That is intended: we cannot
-tell which of them ever chose, and re-collecting is the only honest way to find
-out.
-
 - Analytics consent is required for a persistent `FGV`, an `FG2`, browsing events and dashboard journey joining.
-- Marketing consent independently controls Google/Meta tags, click identifiers and enhanced/offline matching. GCLID/BRAID values and Google `_gcl_*` storage must be cleared when marketing consent is withdrawn.
-- **The `FGA` ad reference is NOT gated on consent**, and this is the one deliberate exception. It is derived from the visitor's own landing URL, stored on nothing, and identifies an ad click rather than a person. Withholding it would lose which campaign paid for a lead while protecting nobody. See layer 1 above.
-- **The quote embed is not gated on consent either.** The tool is the service the page exists to provide, its URL carries no identifier without consent, and there is no placeholder UI for a held-back state. What is gated is the measurement: an ungated embed produces an aggregate total and no journey.
+- Marketing consent independently controls Google/Meta tags, click identifiers, enhanced/offline matching and the marketing-only `FGA` reference. GCLID/BRAID values and Google `_gcl_*` storage must be cleared when marketing consent is withdrawn.
 - A returning consenting browser normally keeps the same `FGV` for 90 days. Incognito, cleared site storage, a new browser/device or an expired ID becomes a different visitor.
 - Rejected/no-choice visitors can still submit a WindowCAD quote or website form to the office, but they do **not** get a consented tracker visitor, journey or individual browsing record. Separate aggregate-only statistical totals may include their page views and high-level actions.
 - Consent Health is aggregate-only and distinguishes `Accept all`, `Analytics only`, `Marketing only` and `Necessary only`. It is never tied to a visitor, page, source, device or journey.
 - Banner impressions (`banner_shown`) are counted separately from choices, but only as an implementation health check: a live figure of zero means the consent modal or the `/consent` endpoint has broken. **They cannot measure abandonment.** The count structurally undercounts against choices, so impressions minus choices can go negative. See the note under Overview and funnel for why, and never build a rate on it.
-- **Crawlers no longer contribute to it at all** (August 2026). The modal is not opened for automated traffic and the `/consent` endpoint drops it, so one of the three distorting causes is gone. The other two are structural and remain, so the rule above is unchanged: it is a health check, never a denominator.
-
-### Withdrawal actually erases now
-
-`POST /api/website/withdraw` deletes the visitor, **every** journey belonging to
-that visitor, their events and their Legend transcripts. The theme calls it when
-somebody turns analytics off, before clearing local storage — which is the only
-possible order, since the request has to name the identifiers that clearing
-removes. The call uses `keepalive`, because the page reloads immediately
-afterwards and an ordinary request would be cancelled in flight and delete
-nothing while looking like it had worked.
-
-The aggregate statistical table is deliberately untouched. It holds hourly counts
-with no visitor, journey or device identifier in them, so there is nothing in it
-belonging to that person and no row that could be decremented without corrupting
-a total that is not about them.
 
 ### Non-consented statistical traffic
 
@@ -347,30 +222,15 @@ Office lead outcomes, booked consultations, qualified leads and confirmed sales 
 | Legend Chats is empty | Send a real message, not merely open the drawer; then check the site-to-dashboard chat endpoint and dashboard deployment. Rejected-cookie chats should be chat-only, not Customer database rows. |
 | Counts look larger than expected | Check whether the metric counts actions/journeys rather than people. Multiple starts or WindowCAD submissions from one visitor are legitimate. |
 | History disappears after a deploy | Check `SELECT environment, COUNT(*) FROM website_events GROUP BY environment` before anything else. A migration that adds a defaulted column will strand every existing row under that default while the reads still filter on `production`. See the 31 July 2026 blackout above. |
-| Channels are almost all "Direct or unknown" | The live ad URLs are not carrying UTM parameters. Nothing in the dashboard can recover a source that was never sent; fix the tagging on the ad destination URLs. Observed across nearly every attributed lead on 3 August 2026. **Note this affects layer 2 only** — the ad click log still records the click, but without the suffix it has no campaign name to file it under. |
-| Attributable share fell sharply in August 2026 | Expected, and it is the consent-first flip rather than a fault. Journeys now require a button press, and records from the granted-by-default period were invalidated so those visitors are asked again. Compare paid performance using the ad click log, which is unaffected. |
-| Ad clicks recorded but never any leads against them | Check the visitor is converting on the landing page rather than navigating first — the consent-free join is same-page only, by design. Then confirm `marketing_ref` is reaching WordPress on the enquiry form and that the WindowCAD Tracking value starts `FGA-`. |
-| The ad click log is empty | The recorder runs on `template_redirect` at priority **-10**, because the generated-page renderer runs at 0 and exits. Anything hooked after it never runs on the routes the ads point at. If it was moved, it stopped working everywhere at once. |
-| A journey shows `traffic_class` of `unclassified` | It was written before the classifier existed. The user agent was never stored, so this cannot be resolved retrospectively — do not report these as human. |
+| Channels are almost all "Direct or unknown" | The live ad URLs are not carrying UTM parameters. Nothing in the dashboard can recover a source that was never sent; fix the tagging on the ad destination URLs. Observed across nearly every attributed lead on 3 August 2026. |
 | Leads show no product or value | WindowCAD is not relaying `product_collection` or `price_amount` on the completion callback, so lead value cannot be computed and cost-per-lead stays unavailable. |
 | A consent percentage exceeds 100% | It was derived from `banner_shown`, which is unreliable. Use the page-view split instead and report choices as a count. |
 
 ## Technical ownership
 
 - Website collector: Fenster theme `inc/website-tracking.php` and `src/js/main.js`.
-- Automated-traffic classification: Fenster theme `inc/traffic-classification.php`, mirrored at the ingest in `functions/api/[[path]].js`. **Two copies of one rule — when adding a crawler, add it in both.** The PHP list is the fuller one and the one to copy from.
-- Consent-free ad attribution: Fenster theme `inc/ad-attribution.php`.
-- Consent layer and withdrawal: Fenster theme `inc/consent.php`.
 - WindowCAD/AdminBase callback relay: Fenster theme `inc/adminbase.php`.
 - Dashboard API, D1 storage and UI: this repository (`functions/api/[[path]].js`, `migrations/`, `public/app.js`).
 - Dashboard changes deploy separately to Cloudflare Pages; a theme deploy does not update it.
-
-### One trap that has bitten twice
-
-`CUBOT` is an Android handset brand, so its owners send a user agent containing
-the string `bot`. A bare substring test therefore classifies real customers as
-crawlers and deletes them from the data — and nothing in a dashboard can show you
-that happened. Both classifiers strip a short exception list before the generic
-token test. The old `websiteStatDevice` carried this bug and has been corrected.
 
 For implementation and deployment details, see `README.md`. Update this guide whenever tracker behaviour, fields, retention or consent handling changes.

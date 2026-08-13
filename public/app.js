@@ -2005,7 +2005,7 @@ function wtOverview() {
     [totalForms, "Forms sent", `${wtFmt(totalForms ? (s.formStarts || 0) + (stat.formStarts || 0) : 0)} started`],
     [Number(s.quoteJourneys || 0) + Number(stat.quoteStarts || 0), "Quote starts", "deliberate opens"],
     [Number(s.calls || 0) + Number(stat.contactClicks || 0), "Phone / email clicks", "intent only, not answered calls"],
-    [s.uniqueVisitors, "Consented visitors", `${wtFmt(s.journeys)} journeys`],
+    [Number(s.ctaClicks || 0) + Number(stat.ctaClicks || 0), "CTA clicks", "commercial buttons pressed"],
     [s.legendChats, "Legend chats", "saved for 30-day QA"],
     [s.outcomes?.won || 0, "Won leads", "marked by the office"]
   ];
@@ -2015,12 +2015,63 @@ function wtOverview() {
     <div class="wt-kpis">${kpis.map(([value, label, hint], index) => `
       <article class="wt-kpi ${index === 0 ? "wt-kpi--lead" : ""}"><strong>${wtFmt(value)}</strong><span>${label}</span><small>${hint}</small></article>
     `).join("")}</div>
+    ${wtCampaigns()}
     ${wtTrend()}
     <div class="wt-grid wt-grid--two">
       ${wtFunnel()}
       ${wtConsent()}
     </div>
     ${wtDecision()}
+  `;
+}
+
+/*
+ * Paid performance, and the only panel here that is complete for ads.
+ *
+ * The click is read from the landing URL, so it needs no consent and does not
+ * depend on the visitor answering the banner. If every campaign reads
+ * "Not tagged", the Final URL suffix is missing in the Google Ads account --
+ * nothing here can recover a campaign name that was never sent.
+ */
+function wtCampaigns() {
+  const rows = (websiteState.adClicks || []).filter((row) => Number(row.clicks || 0) > 0);
+  if (!rows.length) {
+    return `
+      <section class="wt-panel">
+        <h3>Paid campaigns</h3>
+        <div class="fw-empty">
+          <strong>No ad clicks recorded in this period</strong>
+          <span>Clicks appear here automatically. If paid traffic is running and this stays empty, check the Final URL suffix in Google Ads.</span>
+        </div>
+      </section>
+    `;
+  }
+
+  const untagged = rows.filter((row) => !row.campaign).length;
+  return `
+    <section class="wt-panel">
+      <h3>Paid campaigns <small class="fw-tag">no consent needed</small></h3>
+      <table class="wt-table">
+        <thead><tr><th>Campaign</th><th>Clicks</th><th>Leads</th><th>Quotes</th><th>Forms</th><th>Per lead</th></tr></thead>
+        <tbody>
+          ${rows.map((row) => {
+            const clicks = Number(row.clicks || 0);
+            const leads = Number(row.leads || 0);
+            return `
+              <tr>
+                <td>${row.campaign ? escapeHtml(row.campaign) : '<em class="fw-muted">Not tagged</em>'}</td>
+                <td>${wtFmt(clicks)}</td>
+                <td><b>${wtFmt(leads)}</b></td>
+                <td>${wtFmt(row.quotes || 0)}</td>
+                <td>${wtFmt(row.forms || 0)}</td>
+                <td>${leads ? `${(clicks / leads).toFixed(1)} clicks` : "&mdash;"}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table>
+      ${untagged ? `<p class="fw-coverage__note">${untagged} campaign row${untagged === 1 ? " has" : "s have"} no name, which means the Google Ads Final URL suffix is not set on that campaign. The clicks are still counted; only the campaign name is missing.</p>` : ""}
+    </section>
   `;
 }
 
@@ -2066,6 +2117,9 @@ function wtCoverage() {
     `;
   }
 
+  const integrity = websiteState.integrity || {};
+  const unresolved = Number(integrity.unclassified || 0) + Number(integrity.no_signal || 0);
+
   return `
     <section class="fw-coverage">
       <div class="fw-coverage__head">
@@ -2073,7 +2127,7 @@ function wtCoverage() {
         <span>${wtFmt(decisions)} cookie choices recorded over ${websiteState.periodDays || 30} days</span>
       </div>
       <div class="fw-coverage__bar" role="img"
-        aria-label="${wtFmt(consentedViews)} consented page views and ${wtFmt(anonymousViews)} anonymous page views">
+        aria-label="${wtFmt(consentedViews)} visits with a timeline and ${wtFmt(anonymousViews)} counted anonymously">
         <i style="width:${consentedShare}%"></i><i style="width:${100 - consentedShare}%"></i>
       </div>
       <p class="fw-coverage__note">
@@ -2083,6 +2137,7 @@ function wtCoverage() {
         everything below headed &ldquo;consented&rdquo; is drawn from that share alone,
         not from all of your traffic.
       </p>
+      ${unresolved ? `<p class="fw-coverage__note fw-muted">${wtFmt(unresolved)} journeys in this period predate automated-traffic filtering and cannot be resolved retrospectively, because the user agent was never stored. Do not read them as human.</p>` : ""}
     </section>
   `;
 }

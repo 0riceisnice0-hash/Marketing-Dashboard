@@ -14,12 +14,10 @@
 
 import { FENSTER_CONTACT, knowledgeForPrompt, teamForPrompt } from "./knowledge.js";
 
-// Spoken the moment the call connects. It has to sound like someone picking up
-// the phone, not an answerphone, while still being honest that it is the AI
-// assistant covering while the team is out.
+// Spoken the moment the call connects. Owner-specified wording (2026-09-08).
 export const RECEPTIONIST_GREETING =
-  "Hi, Fenster Glazing. The team's not in just now, so you've got the AI assistant, " +
-  "but I can help or get someone to call you back. What can I do for you?";
+  "Hi, I'm an AI automated assistant while the Fenster Glazing office is closed. " +
+  "I can answer general questions or take a message for the team. How can I help?";
 
 export const RECEPTION_TOOLS = [
   {

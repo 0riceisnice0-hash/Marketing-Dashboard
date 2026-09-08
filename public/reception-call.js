@@ -16,6 +16,10 @@
 
 const OPENAI_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
+// What counts as the receptionist having said goodbye.
+const GOODBYE_PATTERN = /\b(bye|goodbye|take care|thanks for calling|cheers|have a (good|nice|lovely) (day|evening|night|one))\b/i;
+const FORCED_GOODBYE = "Thanks for calling, bye.";
+
 // Realtime "error" events that are expected side effects of interruption and
 // should not be surfaced to the operator.
 const IGNORED_ERROR_PATTERNS = [
@@ -323,6 +327,10 @@ export class BrowserTestCall {
           this.stats.assistant_turns += 1;
         }
         this.emitTranscript();
+        if (this.hangup?.awaitingGoodbye && GOODBYE_PATTERN.test(entry.body)) {
+          this.hangup.awaitingGoodbye = false;
+          if (this.ai !== "speaking") this.finishHangup(700);
+        }
         return;
       }
 
@@ -331,7 +339,7 @@ export class BrowserTestCall {
         return;
 
       case "output_audio_buffer.stopped":
-        if (this.hangup) {
+        if (this.hangup && !this.hangup.awaitingGoodbye) {
           this.finishHangup(500);
           return;
         }
@@ -417,38 +425,38 @@ export class BrowserTestCall {
     let reason = "other";
     try { reason = JSON.parse(call.arguments || "{}").reason || "other"; } catch { reason = "other"; }
 
-    // Guard: the receptionist may only hang up straight after a goodbye, and
-    // never while a question or a promised read-back is still hanging. A
-    // hang-up that fails the check is refused and the model is told why.
+    // Every call ends with a spoken goodbye. If this turn already contained
+    // one, hang up once it has finished playing; otherwise make the
+    // receptionist say one now and hang up after that.
     const said = responseTranscript(response) || this.latestAssistantText();
-    const askedQuestion = /\?/.test(said);
-    const promisedMore = /\b(read (that|it) back|let me (just )?(confirm|check)|i'll (just )?(confirm|check|read))\b/i.test(said);
-    const saidGoodbye = /\b(bye|goodbye|take care|thanks for calling|cheers|have a (good|nice|lovely) (day|evening|night|one))\b/i.test(said);
-    if (reason !== "abusive_caller" && reason !== "time_limit" && (askedQuestion || promisedMore || !saidGoodbye)) {
-      this.stats.hangup_refused = (this.stats.hangup_refused || 0) + 1;
-      this.notice("Hang-up refused: the receptionist had not said goodbye yet.");
-      this.reportEvent("hangup_refused", { reason, asked_question: askedQuestion, promised_more: promisedMore, said_goodbye: saidGoodbye, said: said.slice(0, 200) });
-      const why = askedQuestion
-        ? "NOT hung up: you just asked the caller something. Wait for their answer. Only call end_call straight after your goodbye, once the caller has acknowledged."
-        : promisedMore
-          ? "NOT hung up: you promised to read back or confirm. Do that now, wait for the caller to say it is right, then say goodbye, then call end_call."
-          : "NOT hung up: you have not said goodbye yet. Wait for the caller to acknowledge, say 'Thanks for calling, bye', then call end_call.";
-      this.send({
-        type: "conversation.item.create",
-        item: { type: "function_call_output", call_id: call.call_id, output: JSON.stringify({ ok: false, hung_up: false, error: why }) }
-      });
-      if (!askedQuestion) this.send({ type: "response.create" });
+    const saidGoodbye = GOODBYE_PATTERN.test(said);
+    this.hangup = { reason, at: Date.now(), awaitingGoodbye: !saidGoodbye };
+    this.stats.assistant_hung_up = 1;
+    this.api(`/api/reception/calls/${this.callId}/tool`, { method: "POST", body: { name: "end_call", arguments: { reason } } }).catch(() => {});
+
+    if (saidGoodbye) {
+      this.notice("The receptionist is ending the call.");
+      if (this.ai === "speaking") {
+        this.hangup.failsafe = setTimeout(() => this.finishHangup(0), 12000);
+      } else {
+        this.finishHangup(700);
+      }
       return;
     }
-    this.hangup = { reason, at: Date.now() };
-    this.api(`/api/reception/calls/${this.callId}/tool`, { method: "POST", body: { name: "end_call", arguments: { reason } } }).catch(() => {});
-    this.notice("The receptionist is ending the call.");
-    this.stats.assistant_hung_up = 1;
-    if (this.ai === "speaking") {
-      this.hangup.failsafe = setTimeout(() => this.finishHangup(0), 12000);
-    } else {
-      this.finishHangup(700);
-    }
+
+    this.notice("The receptionist is ending the call and saying goodbye first.");
+    this.reportEvent("goodbye_forced", { reason, said: said.slice(0, 200) });
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "system",
+        content: [{ type: "input_text", text: `The call is ending now. Say exactly "${FORCED_GOODBYE}" and nothing else.` }]
+      }
+    });
+    this.send({ type: "response.create" });
+    // If no goodbye is heard within ten seconds, end the call anyway.
+    this.hangup.failsafe = setTimeout(() => this.finishHangup(0), 10000);
   }
 
   latestAssistantText() {
@@ -483,7 +491,7 @@ export class BrowserTestCall {
           role: "system",
           content: [{
             type: "input_text",
-            text: "TIME LIMIT REACHED. This call must end now. In one short sentence tell the caller the team will pick this up when the office reopens, say goodbye, and call end_call."
+            text: `TIME LIMIT REACHED. This call must end now. In one short sentence tell the caller the team will pick this up when the office reopens, then say "${FORCED_GOODBYE}" and call end_call.`
           }]
         }
       });

@@ -2,3 +2,10 @@ PASSWORD_ZAC=change-this
 PASSWORD_ADAM=change-this
 PASSWORD_NICK=change-this
 SESSION_SECRET=change-this-local-session-secret
+# AI Receptionist (optional locally; the real key lives in Cloudflare Pages secrets)
+# OPENAI_API_KEY=sk-...
+# OPENAI_REALTIME_MODEL=gpt-realtime-2.1
+# OPENAI_SUMMARY_MODEL=gpt-5.6-luna
+# OPENAI_TRANSCRIBE_MODEL=gpt-4o-transcribe
+# OPENAI_REALTIME_VOICE=marin
+# RECEPTION_NOTIFICATION_TO=info@fensterglazing.com

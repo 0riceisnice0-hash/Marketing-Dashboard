@@ -41,6 +41,11 @@ If the live file still contains old code, Cloudflare has not deployed the new ve
 - Reporting period control: 7 / 30 / 90 days / 1 year, driving every figure and the daily chart.
 - Auto-refresh-safe browser-session drafts for end-of-day reports, Facebook/Instagram replies and bot context, so the 60-second refresh cannot discard text being written.
 - Notes attached to records through the shared `notes` table.
+- **AI Receptionist** (first-class sidebar section): an out-of-hours phone
+  assistant prototype. **Test Call** connects the laptop microphone to the
+  OpenAI Realtime API over WebRTC, **Calls** lists every saved call with its
+  transcript, structured summary and the simulated email the office would
+  have received. See [AI Receptionist](#ai-receptionist) below.
 
 ## Project Structure
 
@@ -48,18 +53,23 @@ If the live file still contains old code, Cloudflare has not deployed the new ve
 public/
   index.html          Main HTML shell.
   app.js              Main frontend app, rendering, tab logic, board logic, API calls.
+  reception-call.js   Browser test-call transport: microphone, WebRTC, Realtime events.
   styles.css          Dashboard styling.
   fenster-logo.png    Local logo asset.
 
 functions/
   api/[[path]].js     Main Cloudflare Pages API: login, records, notes, Fenster bot endpoints.
   _data/users.js      Login users and secret names.
+  _lib/http.js        Shared JSON response and HTML escaping helpers.
+  _reception/         AI Receptionist: API routes, receptionist prompt, verified
+                      knowledge, post-call summary and notification providers.
   webhooks/meta.js    Meta/Facebook webhook handler.
 
 migrations/
   0001_initial.sql    Core dashboard tables.
   0002_*.sql          Today's plan, social posts, Fenster conversation tables.
   0003-0007_*.sql     Bot decisions, queue, prompt context, action plan, guidelines.
+  0019_*.sql          AI Receptionist calls, transcripts, notifications, events.
 
 scripts/
   smoke-test.mjs      API smoke test with an in-memory D1-style mock.
@@ -95,6 +105,7 @@ There is currently no `.github/workflows` deployment workflow in this repo.
 - `GET/POST/PATCH/DELETE /api/records/:table`
 - `GET/POST /api/notes/:table/:id`
 - `/api/fenster/...` bot and conversation endpoints
+- `/api/reception/...` AI Receptionist endpoints (see below)
 
 The database is Cloudflare D1. Tables are created by the SQL files in `migrations/`.
 
@@ -126,6 +137,13 @@ Fenster bot tables:
 - `website_events` (quote starts, forms, contact clicks and completed WindowCAD quotes; no customer PII)
 - `website_statistical_aggregate` (hourly aggregate-only statistics for non-consented traffic; no visitor IDs or journeys)
 
+AI Receptionist tables:
+
+- `reception_calls` (one row per call: source, timings, caller details, structured summary, summary/notification status)
+- `reception_call_messages` (the transcript, one row per spoken turn; no audio is stored)
+- `reception_notifications` (every generated notification and its delivery status; V1 only ever writes `simulated`)
+- `reception_call_events` (technical audit trail per call)
+
 ## Login And Secrets
 
 Users live in `functions/_data/users.js`.
@@ -136,6 +154,23 @@ Passwords are not committed. Cloudflare Pages must have these secrets:
 - `PASSWORD_ADAM`
 - `PASSWORD_NICK`
 - `SESSION_SECRET`
+
+The AI Receptionist additionally needs `OPENAI_API_KEY` (already used by the
+Meta bot). Optional receptionist settings, all plain environment variables:
+
+- `OPENAI_REALTIME_MODEL` (default `gpt-realtime-2.1`)
+- `OPENAI_SUMMARY_MODEL` (default `gpt-5.6-luna`; falls back to `gpt-5.4-mini` if the configured model is unknown)
+- `OPENAI_TRANSCRIBE_MODEL` (default `gpt-4o-transcribe`)
+- `OPENAI_REALTIME_VOICE` (default `marin`)
+- `OPENAI_REALTIME_VAD` (`semantic_vad`, the default, or `server_vad`)
+- `OPENAI_REALTIME_NOISE_REDUCTION` (`far_field`, the default for a laptop microphone, or `near_field`)
+- `RECEPTION_NOTIFICATION_TO` (default `info@fensterglazing.com`)
+
+To add the OpenAI secret to the Pages project if it is ever missing:
+
+```bash
+npx wrangler pages secret put OPENAI_API_KEY --project-name marketing-dashboard
+```
 
 For local development, copy `.dev.vars.example` to `.dev.vars`.
 
@@ -321,6 +356,60 @@ Rejected-cookie chats are deliberately chat-only: they have no `FGV`/`FG2`,
 journey, browsing events or attribution but remain visible in **Legend chats**.
 Do not copy transcript personal details into other tools.
 
+## AI Receptionist
+
+**AI Receptionist** is a first-class sidebar section next to the Website
+Tracker. It is the V1 of Fenster's out-of-hours phone assistant: a browser
+prototype that proves the whole workflow before a real telephone number is
+connected. Nothing in it is Legend; Legend is website chat QA.
+
+What happens on **Test Call → Start Test Call**:
+
+1. The browser asks for microphone permission.
+2. `POST /api/reception/calls` creates a `browser_test` call row.
+3. `POST /api/reception/calls/:id/session` builds the receptionist
+   instructions server-side and asks OpenAI for a short-lived Realtime
+   client secret. The browser never receives `OPENAI_API_KEY`.
+4. `public/reception-call.js` opens an `RTCPeerConnection` to
+   `https://api.openai.com/v1/realtime/calls`, sends the microphone track,
+   plays the receptionist through an audio element, and sends
+   `response.create` so the receptionist speaks its greeting first.
+5. Realtime transcription events build a structured in-memory transcript
+   (never scraped from the DOM). The voice model may call one tool,
+   `search_fenster_knowledge`, which the browser relays to
+   `POST /api/reception/calls/:id/tool`.
+6. **End Call** closes the microphone, audio and WebRTC resources, then
+   `POST /api/reception/calls/:id/finalise` stores the transcript,
+   summarises it server-side with the Responses API (Structured Outputs),
+   generates the office email and records it as `simulated`. Finalisation
+   is idempotent. A failed summary keeps the call with
+   `summary_status = failed` and a **Retry summary** button.
+7. The call appears in **Calls**, newest first, with the transcript, the
+   structured summary and the exact email preview. **No email is sent.**
+
+Where things live:
+
+- `functions/_reception/prompt.js` is the receptionist's personality and
+  rules. Edit it there; it is not stored in D1.
+- `functions/_reception/knowledge.js` holds the owner-confirmed Fenster facts
+  (taken from the website repository's `LIVECHAT.md` and Legend backend) and
+  `searchFensterKnowledge(query)`, the retrieval boundary to widen later.
+- `functions/_reception/summary.js` is the post-call summariser.
+- `functions/_reception/notifications.js` is `sendReceptionNotification()`
+  and the `SimulatedNotificationProvider`. A Brevo provider slots in behind
+  the same `deliver()` contract without touching the call pipeline.
+- `functions/_reception/api.js` is the router for `/api/reception/*`.
+
+Designed for what comes next: `reception_calls.source` (`browser_test` now;
+`twilio`, `focus`, `sip` later), `external_call_id`, `caller_number` and
+`called_number` already exist, and the receptionist logic takes no
+dependency on the browser. Twilio, Focus Group, Brevo and CRM lookups are
+deliberately not implemented yet.
+
+Testing: `npm run smoke` covers the whole API with the OpenAI boundary
+mocked (no live calls). A real microphone conversation has to be checked by
+hand on the live dashboard.
+
 ## Common Gotchas
 
 - Pushing to GitHub may not update the live Cloudflare app. Run the Wrangler Pages deploy command.
@@ -330,6 +419,8 @@ Do not copy transcript personal details into other tools.
 - Notes are generic. They should use `/api/notes/:table/:id`, not ticket-only code.
 - If changing card metadata dropdowns, make sure only fields with real option arrays are rendered as selects.
 - The smoke test has a mock SQL layer. If backend SQL changes, update `scripts/smoke-test.mjs` too.
+- The smoke test sends a browser `User-Agent`. Without one the website ingest endpoints classify the request as automated and drop it, which made the consent assertion fail after the bot filtering landed.
+- A test call is ended automatically if you navigate away from the AI Receptionist section or close the tab, so the microphone is never left open.
 
 ## Last Known Deploy Pattern
 

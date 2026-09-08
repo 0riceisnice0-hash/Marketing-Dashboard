@@ -1,4 +1,6 @@
 import { USERS } from "../_data/users.js";
+import { json, escapeHtml } from "../_lib/http.js";
+import { reception } from "../_reception/api.js";
 
 const TABLES = {
   tickets: ["title", "requester", "category", "priority", "status", "owner", "detail", "project_key"],
@@ -44,6 +46,7 @@ export async function onRequest(context) {
     if (route.startsWith("records/")) return records(context, route.replace("records/", ""));
     if (route.startsWith("notes/")) return notes(context, route.replace("notes/", ""), user);
     if (route.startsWith("fenster/")) return fenster(context, route.replace("fenster/", ""), user);
+    if (route.startsWith("reception/")) return reception(context, route.replace("reception/", ""), user);
 
     return json({ error: "Not found" }, 404);
   } catch (error) {
@@ -1950,16 +1953,6 @@ function leadEmailHtml(conversation, decision, requestedBy = "") {
 </html>`;
 }
 
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#039;"
-  })[char]);
-}
-
 function sqlDate(value = Date.now()) {
   return new Date(value).toISOString().replace("T", " ").slice(0, 19);
 }
@@ -2037,11 +2030,4 @@ async function hmac(value, secret) {
 
 function base64Url(value) {
   return btoa(value).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function json(data, status = 200, headers = {}) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json", ...headers }
-  });
 }

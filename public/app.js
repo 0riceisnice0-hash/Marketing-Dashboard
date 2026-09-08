@@ -1,8 +1,11 @@
+import { BrowserTestCall } from "./reception-call.js";
+
 // The tracker is the reason this dashboard gets opened, so it is the landing
 // view and owns the primary nav on its own. The marketing workspace is still a
 // click away, but it no longer sits between the user and the numbers.
 const primaryTabs = [
-  { id: "tracker", label: "Website Tracker", icon: "W" }
+  { id: "tracker", label: "Website Tracker", icon: "W" },
+  { id: "reception", label: "AI Receptionist", icon: "R" }
 ];
 
 const workspaceTabs = [
@@ -18,6 +21,7 @@ const tabs = [...primaryTabs, ...workspaceTabs];
 
 const viewCopy = {
   tracker: "Consent-led attribution. Customer details stay in WordPress and AdminBase.",
+  reception: "Out-of-hours call handling. Browser test calls, transcripts, summaries and simulated email notifications.",
   dashboard: "What matters now, what is blocked, and what has recently shipped.",
   projects: "Choose a work area, then link tickets, ideas, plans, and updates into it.",
   tickets: "Requests stay separate, with each one linked to a project area.",
@@ -394,6 +398,7 @@ function wireChrome() {
     }
     const button = event.target.closest("button[data-tab]");
     if (!button) return;
+    if (!receptionCanLeave(button.dataset.tab)) return;
     current = button.dataset.tab;
     render();
   });
@@ -411,6 +416,7 @@ async function loadApp() {
   window.scrollTo({ top: 0, behavior: "instant" });
   $("#active-user").textContent = `${user.name} - ${user.role}`;
   state = normalizeState(await api("/api/bootstrap"));
+  applyReceptionHash();
   captureSeenItems();
   await enableNotifications();
   startAutoRefresh();
@@ -430,6 +436,8 @@ async function refreshDashboard() {
     state = next;
     if (current === "tracker") {
       await loadWebsite(true);
+    } else if (current === "reception") {
+      await loadReception(true);
     } else if (current === "projects" && selectedProjectKey === "tools") {
       if (toolsTab === "meta") {
         await api("/api/fenster/meta/sync", { method: "POST", body: {} });
@@ -508,6 +516,7 @@ function render() {
 
   const renderers = {
     tracker: renderTrackerArea,
+    reception: renderReceptionArea,
     dashboard: renderDashboard,
     projects: renderProjects,
     tickets: renderTickets,
@@ -2944,6 +2953,689 @@ async function fensterReject() {
   }, "Rejecting decision...");
 }
 
+// ---------------------------------------------------------------------------
+// AI Receptionist: calls list, call detail, and the browser test-call console.
+//
+// The voice transport lives in reception-call.js. This section only renders
+// state and relays clicks; it never touches the microphone or WebRTC itself.
+// ---------------------------------------------------------------------------
+
+let receptionState = null;
+let receptionView = "calls";
+let receptionDetail = null;
+let receptionEmailMode = "text";
+let receptionPendingOpenId = "";
+let receptionLiveCall = null;
+let receptionLive = freshReceptionLive();
+let receptionTimer = null;
+
+function freshReceptionLive() {
+  return { state: null, transcript: [], notices: [], level: 0, result: null, error: "" };
+}
+
+const RC_ICONS = {
+  mic: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg>`,
+  phone: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z"/></svg>`,
+  end: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12c5-5 13-5 18 0l-2.5 2.5-3-1.5v-2c-2.2-.7-4.8-.7-7 0v2l-3 1.5Z"/></svg>`
+};
+
+function renderReceptionArea() {
+  view.innerHTML = `
+    <div class="wt-shell">
+      <p id="reception-status" class="result-note" aria-live="polite"></p>
+      <div id="reception-app" class="reception-app"></div>
+    </div>
+  `;
+  renderReception();
+  loadReception(true);
+}
+
+function setReceptionStatus(text) {
+  const node = $("#reception-status");
+  if (node) node.textContent = text || "";
+}
+
+async function loadReception(silent = false) {
+  const mount = $("#reception-app");
+  if (!mount || current !== "reception") return;
+  try {
+    receptionState = await api("/api/reception/state");
+    if (!silent) setReceptionStatus("");
+    // Never rebuild the console mid-call; the live nodes are updated in place.
+    if (receptionView === "calls" || !receptionLiveCall?.isActive) renderReception();
+    if (receptionPendingOpenId) {
+      const id = receptionPendingOpenId;
+      receptionPendingOpenId = "";
+      await openReceptionCall(id);
+    }
+  } catch (error) {
+    setReceptionStatus(error.message);
+  }
+}
+
+function renderReception() {
+  const mount = $("#reception-app");
+  if (!mount) return;
+  rememberDashboardDrafts(mount);
+  const calls = receptionState?.calls || [];
+  const live = Boolean(receptionLiveCall?.isActive);
+  mount.innerHTML = `
+    <nav class="wt-nav" aria-label="AI Receptionist views">
+      <button class="wt-nav__item ${receptionView === "calls" ? "is-active" : ""}" onclick="window.dashboardReceptionView('calls')">
+        <span>Calls</span>${calls.length ? `<b>${wtFmt(calls.length)}</b>` : ""}
+      </button>
+      <button class="wt-nav__item ${receptionView === "test" ? "is-active" : ""}" onclick="window.dashboardReceptionView('test')">
+        <span>Test Call</span>${live ? `<b class="rc-nav-live">Live</b>` : ""}
+      </button>
+    </nav>
+    <div class="wt-body">${receptionView === "test" ? rcConsole() : rcCalls()}</div>
+  `;
+  restoreDashboardDrafts(mount);
+  if (receptionView === "test") rcSyncConsole();
+}
+
+function setReceptionView(nextView) {
+  if (!["calls", "test"].includes(nextView)) return;
+  if (nextView === "calls" && receptionLiveCall?.isActive) {
+    setReceptionStatus("A test call is in progress. End it before leaving the Test Call view.");
+    return;
+  }
+  receptionView = nextView;
+  setReceptionStatus("");
+  renderReception();
+}
+
+// Called from the sidebar before navigating away. Ends a live call rather
+// than leaving the microphone open in a view the user cannot see.
+function receptionCanLeave(nextTab) {
+  if (nextTab === "reception" || !receptionLiveCall?.isActive) return true;
+  if (!confirm("A test call is in progress. Leaving this section will end the call and save it. Continue?")) return false;
+  receptionEnd("navigated_away");
+  return true;
+}
+
+function applyReceptionHash() {
+  const match = String(location.hash || "").match(/^#reception(?:\/call\/([A-Za-z0-9-]{8,64}))?$/);
+  if (!match) return;
+  current = "reception";
+  receptionView = "calls";
+  receptionPendingOpenId = match[1] || "";
+}
+
+// ---------------------------------------------------------------------------
+// Calls view
+// ---------------------------------------------------------------------------
+
+function rcCalls() {
+  const s = receptionState;
+  const calls = s?.calls || [];
+  const stats = s?.stats || {};
+  const config = s?.config || {};
+  return `
+    ${config.openAi === false ? `
+      <div class="wt-alert">
+        <strong>OpenAI is not configured for this dashboard.</strong>
+        <span>Test calls cannot start until the <code>OPENAI_API_KEY</code> secret is added to the Cloudflare Pages project. Saved calls below are still readable.</span>
+      </div>` : ""}
+    <div class="wt-kpis">
+      <article class="wt-kpi"><strong>${wtFmt(stats.total || 0)}</strong><span>Saved calls</span><small>${wtFmt(stats.today || 0)} today</small></article>
+      <article class="wt-kpi"><strong>${wtFmt(stats.needsAction || 0)}</strong><span>Need follow-up</span><small>Action required by the team</small></article>
+      <article class="wt-kpi"><strong>${wtFmt(stats.simulatedNotifications || 0)}</strong><span>Simulated emails</span><small>Recorded, none actually sent</small></article>
+      <article class="wt-kpi wt-kpi--text"><strong>${escapeHtml(config.realtimeModel || "—")}</strong><span>Voice model</span><small>Summary: ${escapeHtml(config.summaryModel || "—")}</small></article>
+    </div>
+    ${receptionDetail ? rcDetail() : ""}
+    <section class="wt-panel">
+      <header class="wt-panel__head">
+        <div><h4>Receptionist calls</h4><p>Newest first. Every call here is a browser test until the telephone line is connected; the source column says which. Click a row for the transcript and the email that would have gone to ${escapeHtml(config.notificationTo || "info@fensterglazing.com")}.</p></div>
+        <div class="tools-head__actions"><button class="tool-action" onclick="window.dashboardReceptionRefresh()">Refresh</button></div>
+      </header>
+      ${calls.length ? `
+        <div class="table-wrap"><table class="table wt-table rc-table">
+          <thead><tr><th>When</th><th>Caller</th><th>For</th><th>Reason</th><th>Action required</th><th>Urgency</th><th>Length</th><th>Source</th><th>Email</th></tr></thead>
+          <tbody>${calls.map(rcCallRow).join("")}</tbody>
+        </table></div>
+      ` : `<p class="empty">No receptionist calls saved yet. Open <strong>Test Call</strong> to make the first one.</p>`}
+    </section>
+  `;
+}
+
+function rcCallRow(call) {
+  const active = receptionDetail?.call?.id === call.id;
+  const caller = call.caller_name || (call.status === "completed" && call.summary_status === "completed" ? "Name not given" : "");
+  const number = call.callback_number || call.caller_number || "";
+  return `
+    <tr class="rc-row ${active ? "is-active" : ""} ${call.status !== "completed" ? "rc-row--" + escapeHtml(call.status) : ""}" onclick="window.dashboardReceptionOpen('${escapeHtml(call.id)}')">
+      <td><strong>${escapeHtml(formatDateTime(call.started_at))}</strong>${call.status !== "completed" ? `<br><small>${escapeHtml(rcStatusLabel(call))}</small>` : ""}</td>
+      <td>${caller ? `<strong>${escapeHtml(caller)}</strong>` : `<span class="rc-muted">—</span>`}${number ? `<br><small>${escapeHtml(number)}</small>` : ""}</td>
+      <td>${call.requested_person ? escapeHtml(call.requested_person) : `<span class="rc-muted">—</span>`}</td>
+      <td>${call.topic ? `<strong>${escapeHtml(call.topic)}</strong>` : `<span class="rc-muted">—</span>`}${call.summary ? `<br><small>${escapeHtml(rcTruncate(call.summary, 110))}</small>` : ""}</td>
+      <td>${call.action_required ? escapeHtml(rcTruncate(call.action_required, 90)) : `<span class="rc-muted">—</span>`}</td>
+      <td>${rcUrgencyPill(call)}</td>
+      <td>${escapeHtml(rcDuration(call.duration_seconds))}</td>
+      <td>${rcSourcePill(call.source)}</td>
+      <td>${rcNotificationPill(call)}</td>
+    </tr>
+  `;
+}
+
+function rcStatusLabel(call) {
+  return { in_progress: "In progress or not ended", failed: `Failed to start${call.end_reason ? ` (${call.end_reason.replace(/_/g, " ")})` : ""}`, abandoned: "Abandoned" }[call.status] || call.status;
+}
+
+function rcTruncate(text, limit) {
+  const value = String(text || "");
+  return value.length > limit ? `${value.slice(0, limit - 1).trimEnd()}…` : value;
+}
+
+function rcDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (!total) return "—";
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return minutes ? `${minutes}m ${String(rest).padStart(2, "0")}s` : `${rest}s`;
+}
+
+function rcUrgencyPill(call) {
+  if (call.summary_status === "failed") return `<span class="pill rc-pill rc-pill--failed">Summary failed</span>`;
+  if (!call.urgency) return `<span class="rc-muted">—</span>`;
+  const label = call.urgency[0].toUpperCase() + call.urgency.slice(1);
+  return `<span class="pill rc-pill rc-pill--${escapeHtml(call.urgency)}">${escapeHtml(label)}</span>`;
+}
+
+function rcSourcePill(source) {
+  const labels = { browser_test: "Browser test", twilio: "Telephone (Twilio)", focus: "Telephone (Focus)", sip: "Telephone (SIP)" };
+  return `<span class="pill rc-pill rc-pill--source-${escapeHtml(source || "unknown")}">${escapeHtml(labels[source] || source || "Unknown")}</span>`;
+}
+
+function rcNotificationPill(call) {
+  const status = call.notification_status || "pending";
+  const labels = { simulated: "Simulated", sent: "Sent", failed: "Failed", skipped: "Not needed", pending: "Pending" };
+  return `<span class="pill rc-pill rc-pill--note-${escapeHtml(status)}">${escapeHtml(labels[status] || status)}</span>`;
+}
+
+async function openReceptionCall(id) {
+  try {
+    setReceptionStatus("");
+    receptionDetail = await api(`/api/reception/calls/${encodeURIComponent(id)}`);
+    receptionEmailMode = "text";
+    receptionView = "calls";
+    renderReception();
+    document.querySelector(".rc-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    setReceptionStatus(error.message);
+  }
+}
+
+function closeReceptionCall() {
+  receptionDetail = null;
+  renderReception();
+}
+
+function setReceptionEmailMode(mode) {
+  receptionEmailMode = mode === "html" ? "html" : "text";
+  renderReception();
+}
+
+async function deleteReceptionCall(id) {
+  const call = receptionDetail?.call?.id === id ? receptionDetail.call : (receptionState?.calls || []).find((item) => item.id === id);
+  const label = call?.caller_name || call?.topic || formatDateTime(call?.started_at) || id;
+  if (!confirm(`Delete this test call (${label})? The transcript and simulated email are removed too.`)) return;
+  try {
+    await api(`/api/reception/calls/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (receptionDetail?.call?.id === id) receptionDetail = null;
+    await loadReception();
+    setReceptionStatus("Test call deleted.");
+  } catch (error) {
+    setReceptionStatus(error.message);
+  }
+}
+
+async function resummariseReceptionCall(id) {
+  try {
+    setReceptionStatus("Re-running the summary...");
+    receptionDetail = await api(`/api/reception/calls/${encodeURIComponent(id)}/summarise`, { method: "POST", body: {} });
+    receptionState = await api("/api/reception/state");
+    setReceptionStatus(receptionDetail?.call?.summary_status === "completed" ? "Summary updated." : "The summary still failed. See the call's technical log.");
+    renderReception();
+  } catch (error) {
+    setReceptionStatus(error.message);
+  }
+}
+
+function rcDetail() {
+  const { call, messages = [], notifications = [], events = [] } = receptionDetail;
+  const notification = notifications[0] || null;
+  const facts = [
+    ["Caller", call.caller_name],
+    ["Callback number", call.callback_number || (call.caller_number ? `${call.caller_number} (caller ID)` : "")],
+    ["Email", call.caller_email],
+    ["Postcode / area", call.postcode],
+    ["Requested", call.requested_person],
+    ["Topic", call.topic],
+    ["Urgency", call.urgency ? call.urgency[0].toUpperCase() + call.urgency.slice(1) : ""],
+    ["Resolved on the call", call.summary_status === "completed" ? (call.resolved_during_call ? "Yes" : "No, follow-up needed") : ""],
+    ["Started", formatDateTime(call.started_at)],
+    ["Ended", call.ended_at ? formatDateTime(call.ended_at) : "—"],
+    ["Duration", rcDuration(call.duration_seconds)],
+    ["Source", ({ browser_test: "browser_test (dashboard microphone test)" })[call.source] || call.source],
+    ["Caller number supplied", call.caller_number ? `${call.caller_number}${call.metadata?.simulated_caller_number ? " (simulated)" : ""}` : "None"],
+    ["Voice model", call.realtime_model],
+    ["Summary", ({ completed: `Completed (${call.summary_model || "model"})`, failed: "Failed", skipped: "Skipped (nothing to summarise)", pending: "Pending" })[call.summary_status] || call.summary_status],
+    ["Email notification", ({ simulated: `Simulated to ${notification?.recipient || ""} (not sent)`, sent: "Sent", failed: "Failed", skipped: "Not generated", pending: "Pending" })[call.notification_status] || call.notification_status],
+    ["Started by", call.started_by]
+  ].filter(([, value]) => value);
+
+  return `
+    <section class="rc-detail website-journey-detail">
+      <div class="website-journey-detail__head">
+        <div>
+          <span>Call record · ${rcSourcePill(call.source)} ${rcNotificationPill(call)}</span>
+          <h3>${escapeHtml(call.topic || (call.status === "completed" ? "Untitled call" : rcStatusLabel(call)))}${call.caller_name ? ` · ${escapeHtml(call.caller_name)}` : ""}</h3>
+          <p>${escapeHtml(formatDateTime(call.started_at))} · ${escapeHtml(rcDuration(call.duration_seconds))} · <code>${escapeHtml(call.id)}</code></p>
+        </div>
+        <button onclick="window.dashboardReceptionClose()">Close <b>×</b></button>
+      </div>
+
+      ${call.summary_status === "failed" ? `
+        <div class="wt-alert rc-detail__alert">
+          <strong>The post-call summary failed, so the transcript is shown raw.</strong>
+          <span>${escapeHtml(call.summary_error || "Unknown error")}. No email notification was generated. You can retry once the cause is fixed.</span>
+        </div>` : ""}
+
+      <div class="rc-detail__grid">
+        <div class="rc-detail__facts">
+          <h4>Structured summary</h4>
+          <dl class="rc-facts">${facts.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>
+          ${call.summary ? `<h4>Summary</h4><p class="rc-prose">${escapeHtml(call.summary)}</p>` : ""}
+          ${call.message ? `<h4>Message for the team</h4><p class="rc-prose">${escapeHtml(call.message)}</p>` : ""}
+          ${call.action_required ? `<h4>Action required</h4><p class="rc-prose rc-prose--action rc-prose--${escapeHtml(call.urgency || "normal")}">${escapeHtml(call.action_required)}</p>` : ""}
+          <div class="actions">
+            ${call.status === "completed" && messages.some((message) => message.role === "user") ? `<button onclick="window.dashboardReceptionResummarise('${escapeHtml(call.id)}')">${call.summary_status === "failed" ? "Retry summary" : "Re-run summary"}</button>` : ""}
+            ${call.source === "browser_test" ? `<button class="danger-action" onclick="window.dashboardReceptionDelete('${escapeHtml(call.id)}')">Delete test call</button>` : ""}
+          </div>
+        </div>
+        <div class="rc-detail__transcript">
+          <h4>Transcript <small>${wtFmt(messages.length)} turn${messages.length === 1 ? "" : "s"}</small></h4>
+          ${messages.length ? `<div class="rc-stream">${messages.map(rcMessage).join("")}</div>` : `<p class="empty">No transcript was captured for this call.</p>`}
+        </div>
+      </div>
+
+      <div class="rc-email">
+        <div class="rc-email__head">
+          <div>
+            <h4>Email notification preview</h4>
+            <p>${notification
+              ? `This is exactly what <strong>${escapeHtml(notification.recipient)}</strong> would have received. Status: <strong>${escapeHtml(notification.status)}</strong> via the ${escapeHtml(notification.provider)} provider${notification.status === "simulated" ? " · <strong>no email was actually sent</strong>" : ""}.`
+              : "No email was generated for this call."}</p>
+          </div>
+          ${notification ? `
+            <div class="fenster-tabs rc-email__modes">
+              <button class="${receptionEmailMode === "text" ? "active" : ""}" onclick="window.dashboardReceptionEmailMode('text')">Plain text</button>
+              <button class="${receptionEmailMode === "html" ? "active" : ""}" onclick="window.dashboardReceptionEmailMode('html')">HTML</button>
+            </div>` : ""}
+        </div>
+        ${notification ? `
+          <div class="rc-email__meta"><span>To</span><code>${escapeHtml(notification.recipient)}</code><span>Subject</span><strong>${escapeHtml(notification.subject)}</strong><span>Generated</span><code>${escapeHtml(formatDateTime(notification.created_at))}</code></div>
+          ${receptionEmailMode === "html"
+            ? `<iframe class="rc-email__frame" title="HTML email preview" sandbox="" srcdoc="${escapeHtml(notification.body_html || "")}"></iframe>`
+            : `<pre class="rc-email__text">${escapeHtml(notification.body_text || "")}</pre>`}
+        ` : ""}
+      </div>
+
+      <details class="rc-log">
+        <summary>Technical log <small>${wtFmt(events.length)} event${events.length === 1 ? "" : "s"}</small></summary>
+        <div class="rc-log__list">${events.length ? events.map((event) => `<div><time>${escapeHtml(formatDateTime(event.created_at))}</time><code>${escapeHtml(event.type)}</code><span>${escapeHtml(rcEventDetail(event.detail))}</span></div>`).join("") : `<p class="empty">Nothing logged.</p>`}</div>
+      </details>
+    </section>
+  `;
+}
+
+function rcEventDetail(detail) {
+  if (!detail || typeof detail !== "object") return "";
+  return Object.entries(detail).filter(([, value]) => value !== "" && value !== null && value !== undefined).map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : value}`).join(" · ");
+}
+
+function rcMessage(message) {
+  const assistant = message.role === "assistant";
+  return `<article class="rc-turn rc-turn--${assistant ? "assistant" : "caller"}"><span class="rc-turn__who">${assistant ? "Receptionist" : "Caller"}</span><p>${escapeHtml(message.body)}</p>${message.spoken_at ? `<time>${escapeHtml(formatDateTime(message.spoken_at))}</time>` : ""}</article>`;
+}
+
+// ---------------------------------------------------------------------------
+// Test Call console
+// ---------------------------------------------------------------------------
+
+function rcConsole() {
+  const config = receptionState?.config || {};
+  const live = receptionLive;
+  const active = Boolean(receptionLiveCall?.isActive);
+  const phase = live.state?.phase || "idle";
+  const finished = phase === "ended" || (phase === "error" && live.result);
+  return `
+    <section class="rc-console">
+      <div class="rc-console__banner">
+        <span class="rc-console__tag">Prototype / Browser Test</span>
+        <div>
+          <strong>No real telephone call takes place.</strong>
+          <span>Your laptop microphone is connected live to the AI receptionist so you can rehearse an after-hours call. The call is transcribed, summarised and saved; the email notification is simulated and recorded, never sent.</span>
+        </div>
+      </div>
+      ${config.openAi === false ? `
+        <div class="wt-alert"><strong>OpenAI is not configured.</strong><span>Add the <code>OPENAI_API_KEY</code> secret to the Cloudflare Pages project before starting a test call.</span></div>` : ""}
+      <div class="rc-console__grid">
+        <div class="rc-stage" id="rc-stage" data-ai="${escapeHtml(live.state?.ai || "idle")}" data-phase="${escapeHtml(phase)}">
+          <div class="rc-avatar" id="rc-avatar"><span class="rc-avatar__ring"></span><span class="rc-avatar__ring rc-avatar__ring--outer"></span><i>${RC_ICONS.phone}</i></div>
+          <div class="rc-stage__state" id="rc-state-label">${escapeHtml(rcStateLabel())}</div>
+          <div class="rc-timer" id="rc-timer" aria-label="Call timer">${escapeHtml(rcElapsed())}</div>
+          <div class="rc-chips" id="rc-chips">${rcChips()}</div>
+          <div class="rc-meter" id="rc-meter" aria-hidden="true">${Array.from({ length: 14 }, () => "<i></i>").join("")}</div>
+          <div class="rc-controls" id="rc-controls">${rcControls()}</div>
+          <p class="rc-stage__status" id="rc-status">${escapeHtml(live.state?.message || (config.openAi === false ? "Waiting for OpenAI configuration." : "Ready when you are."))}</p>
+          <div class="rc-error" id="rc-error" ${live.error ? "" : "hidden"}>${escapeHtml(live.error)}</div>
+        </div>
+        <div class="rc-transcript">
+          <div class="rc-transcript__head">
+            <h4>Live transcript</h4>
+            <p>${active ? "Both sides of the conversation appear here as they are spoken." : "The conversation will appear here once the call connects."}</p>
+          </div>
+          <div class="rc-stream rc-stream--live" id="rc-transcript-stream">${rcLiveTranscript()}</div>
+          <div class="rc-notices" id="rc-notices">${rcNotices()}</div>
+        </div>
+      </div>
+      ${!active && !finished ? `
+        <div class="rc-setup">
+          <label>
+            <span>Simulated caller number <span class="rc-optional">optional</span></span>
+            <input id="rc-caller-number" type="tel" inputmode="tel" placeholder="07700 900123" maxlength="32" autocomplete="off" data-dashboard-draft="reception-caller-number">
+          </label>
+          <p>A real phone line supplies the caller's number automatically. Enter one here to rehearse that: the receptionist will confirm it as the callback number instead of asking for it. Leave it blank and the receptionist asks for a number when one is needed.</p>
+          <p class="rc-setup__greeting"><strong>Greeting:</strong> “${escapeHtml(config.greeting || "Thanks for calling Fenster Glazing. Our office is currently closed…")}”</p>
+        </div>` : ""}
+      ${finished ? rcResult() : ""}
+    </section>
+  `;
+}
+
+function rcStateLabel() {
+  const state = receptionLive.state;
+  if (!state) return "Ready";
+  const labels = {
+    idle: "Ready",
+    requesting_mic: "Microphone",
+    creating: "Setting up",
+    connecting: "Connecting",
+    ending: "Ending",
+    processing: "Saving",
+    ended: "Call ended",
+    error: "Problem"
+  };
+  if (state.phase === "live") {
+    return { listening: "Listening", thinking: "Thinking", speaking: "Speaking", idle: "Connected" }[state.ai] || "Connected";
+  }
+  return labels[state.phase] || state.phase;
+}
+
+function rcElapsed() {
+  const connectedAt = receptionLiveCall?.connectedAt;
+  if (!connectedAt) return "00:00";
+  const end = receptionLiveCall?.endedAt ? new Date(receptionLiveCall.endedAt).getTime() : Date.now();
+  const seconds = Math.max(0, Math.floor((end - new Date(connectedAt).getTime()) / 1000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function rcChips() {
+  const state = receptionLive.state;
+  const phase = state?.phase || "idle";
+  const micLabel = phase === "requesting_mic" ? "Asking permission" : !state || ["idle", "ended", "error", "processing", "ending"].includes(phase) ? "Off" : state.muted ? "Muted" : "Live";
+  const micClass = micLabel === "Live" ? "is-on" : micLabel === "Muted" ? "is-warn" : "";
+  const connLabel = { idle: "Idle", requesting_mic: "Idle", creating: "Preparing", connecting: "Connecting", live: "Connected", ending: "Closing", processing: "Closed", ended: "Closed", error: "Error" }[phase] || phase;
+  const connClass = phase === "live" ? "is-on" : phase === "error" ? "is-error" : ["connecting", "creating"].includes(phase) ? "is-warn" : "";
+  const aiLabel = phase === "live" ? ({ listening: "Listening", thinking: "Thinking", speaking: "Speaking", idle: "Ready" }[state.ai] || "Ready") : "Idle";
+  const aiClass = phase === "live" ? (state.ai === "speaking" ? "is-speaking" : state.ai === "listening" ? "is-on" : "is-warn") : "";
+  return `
+    <span class="rc-chip ${micClass}">${RC_ICONS.mic}<b>Microphone</b>${escapeHtml(micLabel)}</span>
+    <span class="rc-chip ${connClass}"><b>Connection</b>${escapeHtml(connLabel)}</span>
+    <span class="rc-chip ${aiClass}"><b>Receptionist</b>${escapeHtml(aiLabel)}</span>
+  `;
+}
+
+function rcControls() {
+  const state = receptionLive.state;
+  const phase = state?.phase || "idle";
+  const openAi = receptionState?.config?.openAi !== false;
+  if (phase === "idle" || phase === "ended" || (phase === "error" && !receptionLiveCall?.isActive && !rcCanRetrySave())) {
+    return `<button class="rc-button rc-button--start" onclick="window.dashboardReceptionStart()" ${openAi ? "" : "disabled"}>${RC_ICONS.phone}<span>${phase === "idle" ? "Start Test Call" : "Start another test call"}</span></button>`;
+  }
+  if (phase === "error" && rcCanRetrySave()) {
+    return `
+      <button class="rc-button rc-button--start" onclick="window.dashboardReceptionRetrySave()">Retry saving the call</button>
+      <button class="rc-button rc-button--ghost" onclick="window.dashboardReceptionDiscard()">Discard</button>
+    `;
+  }
+  if (phase === "processing" || phase === "ending") {
+    return `<button class="rc-button rc-button--ghost" disabled><span class="rc-spinner"></span><span>${phase === "ending" ? "Ending…" : "Summarising and saving…"}</span></button>`;
+  }
+  if (phase === "live") {
+    return `
+      <button class="rc-button rc-button--ghost" onclick="window.dashboardReceptionMute()" aria-pressed="${state.muted ? "true" : "false"}">${RC_ICONS.mic}<span>${state.muted ? "Unmute" : "Mute"}</span></button>
+      <button class="rc-button rc-button--end" onclick="window.dashboardReceptionEnd()">${RC_ICONS.end}<span>End Call</span></button>
+    `;
+  }
+  // requesting_mic / creating / connecting
+  return `<button class="rc-button rc-button--end" onclick="window.dashboardReceptionEnd()">${RC_ICONS.end}<span>Cancel</span></button>`;
+}
+
+function rcCanRetrySave() {
+  return Boolean(receptionLiveCall && receptionLiveCall.phase === "error" && receptionLiveCall.endedAt && receptionLiveCall.callId);
+}
+
+function rcLiveTranscript() {
+  const entries = receptionLive.transcript.filter((entry) => entry.body.trim() || !entry.final);
+  if (!entries.length) {
+    return `<p class="empty rc-stream__empty">${receptionLiveCall?.isActive ? "Waiting for the first words…" : "Nothing yet."}</p>`;
+  }
+  return entries.map((entry) => `
+    <article class="rc-turn rc-turn--${entry.role === "assistant" ? "assistant" : "caller"} ${entry.final ? "" : "is-streaming"} ${entry.partial ? "is-partial" : ""}">
+      <span class="rc-turn__who">${entry.role === "assistant" ? "Receptionist" : "Caller"}${entry.partial ? " · interrupted" : ""}</span>
+      <p>${escapeHtml(entry.body) || "<em>…</em>"}</p>
+    </article>
+  `).join("");
+}
+
+function rcNotices() {
+  const notices = receptionLive.notices.slice(-4);
+  return notices.map((notice) => `<div class="rc-notice">${escapeHtml(notice)}</div>`).join("");
+}
+
+function rcResult() {
+  const result = receptionLive.result;
+  const call = result?.call;
+  if (!call) return "";
+  const summaryOk = call.summary_status === "completed";
+  return `
+    <section class="rc-result">
+      <div class="rc-result__head">
+        <div>
+          <span>Call saved</span>
+          <h4>${escapeHtml(call.topic || (result.empty ? "No conversation" : "Call recorded"))}${call.caller_name ? ` · ${escapeHtml(call.caller_name)}` : ""}</h4>
+          <p>${result.empty
+            ? "The call ended before the caller said anything, so no summary or email was generated."
+            : summaryOk
+              ? `${escapeHtml(call.summary || "")} ${call.notification_status === "simulated" ? "A simulated email to the office has been recorded (nothing was sent)." : ""}`
+              : `The transcript was saved, but the summary failed: ${escapeHtml(call.summary_error || "unknown error")}.`}</p>
+        </div>
+        <div class="rc-result__pills">${rcUrgencyPill(call)} ${rcNotificationPill(call)}</div>
+      </div>
+      ${summaryOk ? `
+        <dl class="rc-facts rc-facts--inline">
+          ${call.callback_number ? `<div><dt>Callback</dt><dd>${escapeHtml(call.callback_number)}</dd></div>` : ""}
+          ${call.requested_person ? `<div><dt>For</dt><dd>${escapeHtml(call.requested_person)}</dd></div>` : ""}
+          <div><dt>Action</dt><dd>${escapeHtml(call.action_required || "")}</dd></div>
+          <div><dt>Duration</dt><dd>${escapeHtml(rcDuration(call.duration_seconds))}</dd></div>
+        </dl>` : ""}
+      <div class="actions">
+        <button class="primary-button" onclick="window.dashboardReceptionOpenSaved('${escapeHtml(call.id)}')">Open call record and email preview</button>
+      </div>
+    </section>
+  `;
+}
+
+// Pushes the current live state into the console without rebuilding it, so
+// the transcript keeps scrolling and the input keeps its value.
+function rcSyncConsole() {
+  const stage = $("#rc-stage");
+  if (!stage) return;
+  const state = receptionLive.state;
+  stage.dataset.ai = state?.ai || "idle";
+  stage.dataset.phase = state?.phase || "idle";
+  const label = $("#rc-state-label");
+  if (label) label.textContent = rcStateLabel();
+  const chips = $("#rc-chips");
+  if (chips) chips.innerHTML = rcChips();
+  const controls = $("#rc-controls");
+  if (controls) controls.innerHTML = rcControls();
+  const status = $("#rc-status");
+  if (status && state?.message) status.textContent = state.message;
+  const error = $("#rc-error");
+  if (error) {
+    error.textContent = receptionLive.error;
+    error.hidden = !receptionLive.error;
+  }
+  const timer = $("#rc-timer");
+  if (timer) timer.textContent = rcElapsed();
+  rcSyncTranscript();
+  const notices = $("#rc-notices");
+  if (notices) notices.innerHTML = rcNotices();
+  rcManageTimer();
+}
+
+function rcSyncTranscript() {
+  const stream = $("#rc-transcript-stream");
+  if (!stream) return;
+  const pinned = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 48;
+  stream.innerHTML = rcLiveTranscript();
+  if (pinned) stream.scrollTop = stream.scrollHeight;
+}
+
+function rcManageTimer() {
+  const live = receptionLiveCall?.phase === "live";
+  if (live && !receptionTimer) {
+    receptionTimer = setInterval(() => {
+      const timer = $("#rc-timer");
+      if (timer) timer.textContent = rcElapsed();
+    }, 500);
+  }
+  if (!live && receptionTimer) {
+    clearInterval(receptionTimer);
+    receptionTimer = null;
+  }
+}
+
+function rcOnLevel(level) {
+  const meter = $("#rc-meter");
+  if (!meter) return;
+  const bars = meter.children;
+  const lit = Math.round(Math.min(1, level) * bars.length);
+  for (let index = 0; index < bars.length; index += 1) {
+    bars[index].classList.toggle("is-lit", index < lit);
+  }
+}
+
+async function receptionStart() {
+  if (receptionLiveCall?.isActive) {
+    setReceptionStatus("A test call is already in progress in this tab.");
+    return;
+  }
+  if (receptionState?.config?.openAi === false) {
+    setReceptionStatus("OpenAI is not configured for this dashboard, so a test call cannot start.");
+    return;
+  }
+  const callerNumber = $("#rc-caller-number")?.value.trim() || "";
+  receptionLive = freshReceptionLive();
+  receptionDetail = null;
+  const call = new BrowserTestCall({
+    callerNumber,
+    api,
+    onState: (state) => {
+      receptionLive.state = state;
+      rcSyncConsole();
+    },
+    onTranscript: (entries) => {
+      receptionLive.transcript = entries;
+      rcSyncTranscript();
+    },
+    onError: (message) => {
+      receptionLive.error = message;
+      rcSyncConsole();
+    },
+    onLevel: rcOnLevel,
+    onNotice: (message) => {
+      receptionLive.notices.push(message);
+      const notices = $("#rc-notices");
+      if (notices) notices.innerHTML = rcNotices();
+    }
+  });
+  receptionLiveCall = call;
+  renderReception();
+  try {
+    await call.start();
+  } catch {
+    // The transport already reported the failure into receptionLive.error.
+    rcSyncConsole();
+  }
+}
+
+async function receptionEnd(reason = "caller_ended") {
+  const call = receptionLiveCall;
+  if (!call || !call.isActive) return;
+  try {
+    const result = await call.end(reason);
+    receptionLive.result = result;
+  } catch {
+    // Saved state is already reflected in the console via onError.
+  }
+  renderReception();
+  loadReception(true);
+}
+
+function receptionMute() {
+  const call = receptionLiveCall;
+  if (!call || call.phase !== "live") return;
+  call.setMuted(!call.muted);
+}
+
+async function receptionRetrySave() {
+  const call = receptionLiveCall;
+  if (!call) return;
+  receptionLive.error = "";
+  try {
+    receptionLive.result = await call.retrySave();
+  } catch {
+    // onError has already updated the console.
+  }
+  renderReception();
+  loadReception(true);
+}
+
+function receptionDiscard() {
+  receptionLiveCall = null;
+  receptionLive = freshReceptionLive();
+  renderReception();
+}
+
+async function receptionOpenSaved(id) {
+  receptionLiveCall = null;
+  receptionLive = freshReceptionLive();
+  receptionView = "calls";
+  await loadReception(true);
+  await openReceptionCall(id);
+}
+
+// A closed tab must not leave a call row open forever; the transport uses a
+// keepalive request so the finalisation survives the page going away.
+window.addEventListener("pagehide", () => {
+  if (receptionLiveCall?.isActive) receptionLiveCall.end("page_closed");
+});
+
 function formatDate(value) {
   if (!value) return "";
   return new Date(value).toLocaleDateString();
@@ -3499,3 +4191,16 @@ window.dashboardWebsiteVisitor = openWebsiteVisitor;
 window.dashboardWebsiteCloseVisitor = closeWebsiteVisitor;
 window.dashboardWebsiteChat = openWebsiteChat;
 window.dashboardWebsiteOutcome = setWebsiteOutcome;
+window.dashboardReceptionView = setReceptionView;
+window.dashboardReceptionRefresh = () => loadReception();
+window.dashboardReceptionOpen = openReceptionCall;
+window.dashboardReceptionClose = closeReceptionCall;
+window.dashboardReceptionEmailMode = setReceptionEmailMode;
+window.dashboardReceptionDelete = deleteReceptionCall;
+window.dashboardReceptionResummarise = resummariseReceptionCall;
+window.dashboardReceptionStart = receptionStart;
+window.dashboardReceptionEnd = () => receptionEnd("caller_ended");
+window.dashboardReceptionMute = receptionMute;
+window.dashboardReceptionRetrySave = receptionRetrySave;
+window.dashboardReceptionDiscard = receptionDiscard;
+window.dashboardReceptionOpenSaved = receptionOpenSaved;

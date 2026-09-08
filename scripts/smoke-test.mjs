@@ -1,4 +1,6 @@
 import { onRequest } from "../functions/api/[[path]].js";
+import { searchFensterKnowledge } from "../functions/_reception/knowledge.js";
+import { officeStatus, buildReceptionistInstructions } from "../functions/_reception/prompt.js";
 
 const tables = {
   tickets: [],
@@ -30,7 +32,11 @@ const tables = {
   website_journeys: [],
   website_events: [],
   website_chat_messages: [],
-  website_lead_outcomes: []
+  website_lead_outcomes: [],
+  reception_calls: [],
+  reception_call_messages: [],
+  reception_notifications: [],
+  reception_call_events: []
 };
 
 let forcedUuid = 1;
@@ -65,6 +71,22 @@ const base = "http://local.test";
 const realFetch = globalThis.fetch;
 const sentMetaMessages = [];
 const sentLeadEmails = [];
+// OpenAI is mocked at the fetch boundary: the smoke test never calls it live.
+const openAiRequests = [];
+const openAiMode = { session: "ok", summary: "ok" };
+const openAiSummaryPayload = {
+  caller_name: "John Smith",
+  callback_number: "07700 900123",
+  email: null,
+  postcode: null,
+  requested_person: "Nick Baker",
+  topic: "Aluminium bifold doors",
+  summary: "John spoke to Nick earlier about a bifold door quotation and has a question about the opening size.",
+  message: "John would like Nick to call him back tomorrow about the bifold opening size.",
+  action_required: "Nick to call John back tomorrow about the bifold opening size.",
+  urgency: "normal",
+  resolved_during_call: false
+};
 
 globalThis.fetch = async (url, init = {}) => {
   if (String(url).includes("lead-email.test")) {
@@ -81,6 +103,31 @@ globalThis.fetch = async (url, init = {}) => {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
+  }
+  if (String(url).includes("api.openai.com/v1/realtime/client_secrets")) {
+    const body = JSON.parse(init.body || "{}");
+    openAiRequests.push({ url: String(url), init, body });
+    if (openAiMode.session === "fail") {
+      return new Response(JSON.stringify({ error: { message: "Incorrect API key provided", type: "invalid_request_error" } }), { status: 401, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ value: "ek_test_secret_123", expires_at: Math.floor(Date.now() / 1000) + 300, session: { id: "sess_test", type: "realtime", model: body.session?.model } }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  if (String(url).includes("api.openai.com/v1/responses")) {
+    const body = JSON.parse(init.body || "{}");
+    openAiRequests.push({ url: String(url), init, body });
+    if (openAiMode.summary === "fail") {
+      return new Response(JSON.stringify({ error: { message: "The server had an error while processing your request." } }), { status: 500, headers: { "Content-Type": "application/json" } });
+    }
+    if (openAiMode.summary === "model_missing_first" && body.model !== "gpt-5.4-mini") {
+      return new Response(JSON.stringify({ error: { message: `The model \`${body.model}\` does not exist or you do not have access to it.`, code: "model_not_found" } }), { status: 404, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ output_text: JSON.stringify(openAiSummaryPayload) }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+  if (String(url).includes("api.openai.com")) {
+    throw new Error(`Unexpected OpenAI request in smoke test: ${url}`);
   }
   if (String(url).includes("graph.facebook.com")) {
     const payload = JSON.parse(init.body || "{}");
@@ -486,13 +533,223 @@ const deleteTicket = await call("/api/records/tickets", {
 
 assert(deleteTicket.status === 200, "ticket delete should work");
 
+// ---------------------------------------------------------------------------
+// AI Receptionist
+// ---------------------------------------------------------------------------
+
+// Knowledge and prompt helpers are pure and checked without any API.
+assert(searchFensterKnowledge("what time are you open tomorrow")[0]?.id === "hours", "opening-hours question should find the hours fact");
+assert(searchFensterKnowledge("do you do triple glazing")[0]?.id === "glazing", "triple glazing question should find the glazing fact");
+assert(searchFensterKnowledge("how long is your guarantee")[0]?.id === "guarantee", "guarantee question should find the guarantee fact");
+assert(searchFensterKnowledge("do you work in Bedford")[0]?.id === "coverage-residential", "Bedford should resolve to residential coverage");
+assert(searchFensterKnowledge("do you fit bifold doors")[0]?.id === "bifold", "bifold question should find the bifold fact");
+assert(searchFensterKnowledge("can you quote for a composite door").some((result) => result.id === "composite-doors"), "composite door quote should surface the composite fact");
+assert(searchFensterKnowledge("xyzzy quantum flux").length === 0, "nonsense should find nothing rather than guessing");
+
+const tuesdayEvening = officeStatus(new Date("2026-09-08T18:42:00Z"));
+assert(tuesdayEvening.open === false && tuesdayEvening.reopens === "tomorrow morning at 8.30am", `Tuesday evening should reopen tomorrow morning (got ${tuesdayEvening.reopens})`);
+assert(officeStatus(new Date("2026-09-11T17:30:00Z")).reopens === "on Monday morning at 8.30am", "Friday evening should reopen Monday");
+assert(officeStatus(new Date("2026-09-08T09:00:00Z")).open === true, "Tuesday 10am UK should be open");
+const promptWithNumber = buildReceptionistInstructions({ callerNumber: "07700 900123", source: "browser_test", now: new Date("2026-09-08T18:42:00Z") });
+assert(promptWithNumber.includes("07700 900123") && promptWithNumber.includes("best callback number"), "caller number should be passed into the instructions");
+assert(promptWithNumber.includes("Thanks for calling Fenster Glazing. Our office is currently closed"), "instructions should carry the greeting");
+assert(!/Chief Meow Officer|purr|meow/i.test(promptWithNumber), "the receptionist must not inherit Legend's cat persona");
+assert(promptWithNumber.includes("Nick Baker, Sales Director"), "the published team roster is in the instructions");
+
+// Unauthenticated access is refused everywhere.
+assert((await call("/api/reception/state")).status === 401, "reception state must require a session");
+assert((await call("/api/reception/calls", { method: "POST", body: "{}" })).status === 401, "creating a call must require a session");
+assert((await call("/api/reception/calls/abc/finalise", { method: "POST", body: "{}" })).status === 401, "finalising must require a session");
+
+const emptyReception = await call("/api/reception/state", { headers: { Cookie: cookie } });
+assert(emptyReception.status === 200, "reception state should load");
+const emptyReceptionData = await emptyReception.json();
+assert(Array.isArray(emptyReceptionData.calls) && emptyReceptionData.calls.length === 0, "no calls initially");
+assert(emptyReceptionData.config.openAi === false, "config should report OpenAI missing until the secret exists");
+assert(emptyReceptionData.config.notificationProvider === "simulated", "V1 provider is simulated");
+
+// Malformed input.
+assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: "not json" })).status === 400, "non-JSON body should be rejected");
+assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ caller_number: "call me maybe" }) })).status === 400, "a non-numeric caller number should be rejected");
+assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ source: "twilio" }) })).status === 400, "only browser_test calls can be created from the dashboard");
+
+// Session without an OpenAI key fails clearly and closes the call.
+const noKeyCall = await (await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: "{}" })).json();
+const noKeySession = await call(`/api/reception/calls/${noKeyCall.call.id}/session`, { method: "POST", headers: { Cookie: cookie }, body: "{}" });
+assert(noKeySession.status === 503, "session without OPENAI_API_KEY should be a 503");
+assert((await noKeySession.json()).code === "openai_not_configured", "the error code should say the key is missing");
+assert(tables.reception_calls.find((row) => row.id === noKeyCall.call.id).status === "failed", "a call that never got a session is marked failed");
+
+env.OPENAI_API_KEY = "test-openai-key";
+
+// Create a browser test call with a simulated caller number.
+const created = await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ source: "browser_test", caller_number: " 07700  900123 " }) });
+assert(created.status === 201, "creating a browser test call should work");
+const createdCall = (await created.json()).call;
+assert(createdCall.status === "in_progress" && createdCall.source === "browser_test", "new call should be an in-progress browser test");
+assert(createdCall.caller_number === "07700 900123", "caller number should be normalised");
+assert(createdCall.metadata.simulated_caller_number === true, "simulated caller metadata should be stored");
+assert(createdCall.started_by === "Zac", "the dashboard user who started the call is recorded");
+
+// Realtime session: the browser gets a client secret, never the API key.
+assert((await call("/api/reception/calls/not-a-real-call/session", { method: "POST", headers: { Cookie: cookie }, body: "{}" })).status === 404, "unknown call session should 404");
+const session = await call(`/api/reception/calls/${createdCall.id}/session`, { method: "POST", headers: { Cookie: cookie }, body: "{}" });
+assert(session.status === 200, "session creation should work with a key");
+const sessionJson = await session.json();
+assert(sessionJson.client_secret === "ek_test_secret_123", "the ephemeral client secret is returned");
+assert(!JSON.stringify(sessionJson).includes("test-openai-key"), "the OpenAI API key must never reach the browser");
+assert(sessionJson.model === "gpt-realtime-2.1", "default realtime model should be the current one");
+const secretRequest = openAiRequests.find((item) => item.url.includes("client_secrets"));
+assert(secretRequest, "a client secret should have been requested from OpenAI");
+assert((secretRequest.init.headers.authorization || secretRequest.init.headers.Authorization) === "Bearer test-openai-key", "the server uses the real key against OpenAI");
+assert(secretRequest.body.session.type === "realtime" && secretRequest.body.session.model === "gpt-realtime-2.1", "session config should target a realtime session");
+assert(secretRequest.body.session.instructions.includes("07700 900123"), "the caller number reaches the receptionist instructions");
+assert(secretRequest.body.session.tools.some((tool) => tool.name === "search_fenster_knowledge"), "the knowledge tool is exposed to the voice model");
+assert(secretRequest.body.session.audio.input.transcription.model === "gpt-4o-transcribe", "input transcription is enabled");
+assert(secretRequest.body.session.audio.input.turn_detection.interrupt_response === true, "barge-in must be enabled");
+assert(secretRequest.body.expires_after.seconds === 300, "client secrets should be short-lived");
+
+// Tools: allowlisted, verified answers only.
+const toolCall = await call(`/api/reception/calls/${createdCall.id}/tool`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ name: "search_fenster_knowledge", arguments: { query: "Do you cover Bedford?" } }) });
+assert(toolCall.status === 200, "knowledge tool should run");
+const toolJson = await toolCall.json();
+assert(toolJson.output.found === true && /Bedfordshire/.test(toolJson.output.results[0].answer), "Bedford should be answered with the verified coverage fact");
+assert((await call(`/api/reception/calls/${createdCall.id}/tool`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ name: "drop_database", arguments: {} }) })).status === 400, "unknown tools are refused");
+
+// Finalise: malformed, then the real transcript. The call is backdated so the
+// duration maths has something to measure.
+assert((await call(`/api/reception/calls/${createdCall.id}/finalise`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ transcript: "not a list" }) })).status === 400, "transcript must be an array");
+const createdRow = tables.reception_calls.find((row) => row.id === createdCall.id);
+createdRow.started_at = new Date(Date.now() - 180000).toISOString();
+const connectedAt = new Date(Date.parse(createdRow.started_at) + 5000).toISOString();
+const spokenAt = (offsetSeconds) => new Date(Date.parse(connectedAt) + offsetSeconds * 1000).toISOString();
+const transcript = [
+  { role: "assistant", body: "Thanks for calling Fenster Glazing. Our office is currently closed, but I'm Fenster's automated assistant. I can answer general questions or take a message for the team. How can I help?", at: spokenAt(0) },
+  { role: "user", body: "Hi, I spoke to Nick earlier about some bifold doors. Can you ask him to give me a ring tomorrow?", at: spokenAt(9) },
+  { role: "assistant", body: "Of course. I'll leave Nick a message. Can I take your name?", at: spokenAt(13) },
+  { role: "user", body: "John Smith.", at: spokenAt(16) },
+  { role: "assistant", body: "Thanks John. Is the number you're calling from, oh seven seven double-oh nine double-oh one two three, the best one for Nick to call you back on?", at: spokenAt(19) },
+  { role: "user", body: "Yes that's fine, it's about the opening size.", at: spokenAt(24) },
+  { role: "assistant", body: "Perfect, I've got that. I'll leave that for Nick and the team will pick it up when the office reopens.", at: spokenAt(28) },
+  { role: "system", body: "should be ignored", at: spokenAt(29) },
+  { role: "user", body: "   ", at: spokenAt(30) },
+  "not an object"
+];
+const finalised = await call(`/api/reception/calls/${createdCall.id}/finalise`, {
+  method: "POST",
+  headers: { Cookie: cookie },
+  body: JSON.stringify({ ended_at: new Date().toISOString(), connected_at: connectedAt, reason: "caller_ended", transcript, client_stats: { user_turns: 3, assistant_turns: 4, model: "gpt-realtime-2.1" } })
+});
+assert(finalised.status === 200, "finalising should work");
+const finalCall = (await finalised.json()).call;
+assert(finalCall.status === "completed", "finalised call is completed");
+assert(finalCall.duration_seconds >= 170 && finalCall.duration_seconds <= 180, `duration should run from connect to end (got ${finalCall.duration_seconds})`);
+assert(finalCall.summary_status === "completed", "summary should complete");
+assert(finalCall.caller_name === "John Smith" && finalCall.callback_number === "07700 900123" && finalCall.requested_person === "Nick Baker", "structured fields come from the summary");
+assert(finalCall.topic === "Aluminium bifold doors" && finalCall.urgency === "normal" && finalCall.resolved_during_call === false, "topic, urgency and resolution are stored");
+assert(finalCall.summary_model === "gpt-5.6-luna", "default summary model should be the configured inexpensive model");
+assert(finalCall.notification_status === "simulated", "a simulated notification should be recorded");
+assert(finalCall.notification?.status === "simulated" && finalCall.notification.recipient === "info@fensterglazing.com", "notification summary rides along with the call");
+assert(finalCall.metadata.client_stats.user_turns === 3 && finalCall.metadata.dropped_transcript_entries === 3, "client stats and dropped entries are kept in metadata");
+const storedMessages = tables.reception_call_messages.filter((row) => row.call_id === createdCall.id);
+assert(storedMessages.length === 7, `seven spoken turns should be stored (got ${storedMessages.length})`);
+assert(storedMessages.every((row, index) => row.sequence === index + 1), "messages are sequenced");
+assert(storedMessages[1].role === "user" && storedMessages[1].spoken_at === spokenAt(9), "caller turns keep their role and timestamp");
+const summaryRequest = openAiRequests.find((item) => item.url.includes("/v1/responses"));
+assert(summaryRequest, "the summary should be requested from the Responses API");
+assert(summaryRequest.body.text.format.type === "json_schema" && summaryRequest.body.text.format.strict === true, "summary must use strict Structured Outputs");
+assert(summaryRequest.body.model === "gpt-5.6-luna", "summary uses the default model");
+assert(summaryRequest.body.input[0].content.includes("Can you ask him to give me a ring tomorrow") && summaryRequest.body.input[0].content.includes("07700 900123"), "transcript and caller ID are sent for summarisation");
+assert(summaryRequest.body.store === false, "summary requests should not be stored by OpenAI");
+const storedNotification = tables.reception_notifications.find((row) => row.call_id === createdCall.id);
+assert(storedNotification && storedNotification.status === "simulated" && storedNotification.provider === "simulated", "notification row is simulated");
+assert(storedNotification.subject === "Out-of-hours call: Nick callback requested – John Smith", `subject should follow the agreed format (got ${storedNotification.subject})`);
+assert(storedNotification.body_text.includes("Caller: John Smith") && storedNotification.body_text.includes("Requested: Nick Baker") && storedNotification.body_text.includes("Action required:\nNick to call John back tomorrow"), "plain-text email carries the structured data");
+assert(storedNotification.body_text.includes("Duration: 2m") && storedNotification.body_text.includes("Urgency:\nNormal"), "email carries duration and urgency");
+assert(storedNotification.body_text.includes("Receptionist: Thanks for calling Fenster Glazing"), "email includes the transcript");
+assert(storedNotification.body_html.includes("Out-of-hours call received") && storedNotification.body_html.includes(`/#reception/call/${createdCall.id}`), "HTML email links back to the dashboard record");
+const eventTypes = tables.reception_call_events.filter((row) => row.call_id === createdCall.id).map((row) => row.type);
+assert(["call.created", "session.created", "tool.called", "call.finalised", "summary.completed", "notification.simulated"].every((type) => eventTypes.includes(type)), `audit trail should be complete (got ${eventTypes.join(", ")})`);
+
+// Idempotent finalisation.
+const again = await call(`/api/reception/calls/${createdCall.id}/finalise`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ transcript: [] }) });
+assert(again.status === 200 && (await again.json()).already_finalised === true, "a second End Call returns the stored result");
+assert(tables.reception_call_messages.filter((row) => row.call_id === createdCall.id).length === 7, "re-finalising must not touch the transcript");
+assert(tables.reception_notifications.filter((row) => row.call_id === createdCall.id).length === 1, "re-finalising must not duplicate the notification");
+assert(openAiRequests.filter((item) => item.url.includes("/v1/responses")).length === 1, "re-finalising must not call OpenAI again");
+
+// Detail view.
+const detail = await call(`/api/reception/calls/${createdCall.id}`, { headers: { Cookie: cookie } });
+assert(detail.status === 200, "call detail should load");
+const detailJson = await detail.json();
+assert(detailJson.messages.length === 7 && detailJson.notifications.length === 1 && detailJson.notifications[0].body_html.includes("<html>"), "detail includes transcript and full email");
+assert(detailJson.events.some((event) => event.type === "summary.completed" && event.detail.model === "gpt-5.6-luna"), "detail includes parsed events");
+assert((await call("/api/reception/calls/does-not-exist", { headers: { Cookie: cookie } })).status === 404, "unknown call detail should 404");
+
+// Empty call: nothing to summarise, nothing to email.
+const emptyCall = (await (await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: "{}" })).json()).call;
+await call(`/api/reception/calls/${emptyCall.id}/session`, { method: "POST", headers: { Cookie: cookie }, body: "{}" });
+const emptyFinal = await (await call(`/api/reception/calls/${emptyCall.id}/finalise`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ transcript: [transcript[0]] }) })).json();
+assert(emptyFinal.empty === true && emptyFinal.call.summary_status === "skipped" && emptyFinal.call.notification_status === "skipped", "a call with no caller speech is skipped, not summarised");
+assert(emptyFinal.call.topic === "No conversation", "empty calls are labelled as such");
+assert(openAiRequests.filter((item) => item.url.includes("/v1/responses")).length === 1, "empty calls must not call the summary model");
+
+// The list is newest first and reports counts.
+const listed = await (await call("/api/reception/state", { headers: { Cookie: cookie } })).json();
+assert(listed.calls[0].id === emptyCall.id && listed.calls.some((item) => item.id === createdCall.id), "state lists calls newest first");
+assert(listed.config.openAi === true && listed.stats.simulatedNotifications === 1 && listed.stats.needsAction === 1, "state reports configuration and counts");
+
+// Summary failure keeps the call and the transcript.
+openAiMode.summary = "fail";
+const failingCall = (await (await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: "{}" })).json()).call;
+await call(`/api/reception/calls/${failingCall.id}/session`, { method: "POST", headers: { Cookie: cookie }, body: "{}" });
+const failedFinal = await call(`/api/reception/calls/${failingCall.id}/finalise`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ transcript: transcript.slice(0, 4) }) });
+assert(failedFinal.status === 200, "a summary failure must not fail the End Call request");
+const failedJson = await failedFinal.json();
+assert(failedJson.call.status === "completed" && failedJson.call.summary_status === "failed", "the call is saved with summary_status failed");
+assert(failedJson.call.summary_error && !failedJson.call.summary_error.includes("test-openai-key"), "summary_error is readable and secret-free");
+assert(failedJson.call.notification_status === "skipped", "no email is simulated when the summary failed");
+assert(tables.reception_call_messages.filter((row) => row.call_id === failingCall.id).length === 4, "the transcript survives a summary failure");
+
+// Retry once the model is back, via the unknown-model fallback, with a different recipient configured.
+openAiMode.summary = "model_missing_first";
+env.RECEPTION_NOTIFICATION_TO = "office-test@fensterglazing.com";
+const retried = await call(`/api/reception/calls/${failingCall.id}/summarise`, { method: "POST", headers: { Cookie: cookie }, body: "{}" });
+assert(retried.status === 200, "retrying the summary should work");
+const retriedJson = await retried.json();
+assert(retriedJson.call.summary_status === "completed" && retriedJson.call.summary_model === "gpt-5.4-mini", `an unknown model falls back to the known-good model (got ${retriedJson.call.summary_model})`);
+assert(retriedJson.call.notification_status === "simulated" && retriedJson.notifications[0].recipient === "office-test@fensterglazing.com", "RECEPTION_NOTIFICATION_TO controls the simulated recipient");
+openAiMode.summary = "ok";
+delete env.RECEPTION_NOTIFICATION_TO;
+
+// Client-side technical events.
+assert((await call(`/api/reception/calls/${createdCall.id}/event`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ type: "webrtc_disconnected", detail: { state: "failed" } }) })).status === 200, "client events are logged");
+assert((await call(`/api/reception/calls/${createdCall.id}/event`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ type: "bad type!" }) })).status === 400, "client event types are validated");
+
+// Delete a browser test call and everything attached to it.
+assert((await call("/api/reception/calls/does-not-exist", { method: "DELETE", headers: { Cookie: cookie } })).status === 404, "deleting an unknown call should 404");
+const removed = await call(`/api/reception/calls/${createdCall.id}`, { method: "DELETE", headers: { Cookie: cookie } });
+assert(removed.status === 200, "deleting a browser test call should work");
+assert((await call(`/api/reception/calls/${createdCall.id}`, { headers: { Cookie: cookie } })).status === 404, "deleted call is gone");
+assert(
+  !tables.reception_call_messages.some((row) => row.call_id === createdCall.id)
+  && !tables.reception_notifications.some((row) => row.call_id === createdCall.id)
+  && !tables.reception_call_events.some((row) => row.call_id === createdCall.id),
+  "transcript, notification and events are removed with the call"
+);
+tables.reception_calls.push({ id: "tel-0001", source: "twilio", status: "completed", started_at: new Date().toISOString(), metadata_json: "{}" });
+assert((await call("/api/reception/calls/tel-0001", { method: "DELETE", headers: { Cookie: cookie } })).status === 403, "telephone calls are protected from casual deletion");
+
 console.log("Smoke test passed");
 
 async function call(path, init = {}) {
+  // A real browser always sends a user agent; without one the ingest endpoints
+  // rightly classify the request as automated and drop it.
   const request = new Request(`${base}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SmokeTest/1.0 Chrome/128.0 Safari/537.36",
       ...(init.headers || {})
     }
   });
@@ -519,6 +776,9 @@ function queryAll({ sql, values }) {
   }
   if (sql.includes("WHERE conversation_id")) {
     return { results: tables.fenster_messages.filter((message) => message.conversation_id === values[0]) };
+  }
+  if (sql.includes("WHERE call_id = ?")) {
+    return { results: tables[table].filter((row) => row.call_id === values[0]) };
   }
   return { results: [...tables[table]].sort((a, b) => b.id - a.id) };
 }
@@ -584,6 +844,10 @@ function run({ sql, values }) {
     });
   }
   if (sql.startsWith("DELETE")) {
+    if (sql.includes("WHERE call_id = ?")) {
+      tables[table] = tables[table].filter((row) => row.call_id !== values[0]);
+      return { meta: {} };
+    }
     if (sql.includes("parent_type")) {
       const [parentType, parentId] = values;
       tables.notes = tables.notes.filter((note) => note.parent_type !== parentType || note.parent_id !== parentId);

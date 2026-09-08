@@ -44,9 +44,10 @@ export const RECEPTION_TOOLS = [
 // Handed to the speech-to-text model so Fenster names and trade terms are
 // transcribed correctly (it is a style/vocabulary hint, not an instruction).
 export const TRANSCRIPTION_HINT =
-  "Fenster Glazing, Milton Keynes, Bedford, Northampton, Aylesbury, Luton, Leighton Buzzard, Nick, Adam, Perry, Kerry, Zac, " +
-  "bifold doors, uPVC, aluminium, composite door, casement, sash windows, tilt and turn, roof lantern, roofline, FENSA, " +
-  "double glazing, triple glazing, guarantee, quote, consultation, callback, postcode, oh seven seven, double oh.";
+  "This is a phone call in British English to Fenster Glazing in Milton Keynes about windows and doors: uPVC, aluminium, " +
+  "bifold doors, composite doors, casement and sash windows, tilt and turn, roof lanterns, roofline, double and triple glazing, " +
+  "FENSA, guarantees, quotes and consultations. Callers may ask for Nick, Adam, Perry, Kerry or Zac, and give a UK number " +
+  "such as 07700 900123, spoken as oh seven seven double oh. Short replies are common: yes, that's right; no, thank you; okay.";
 
 const LONDON = "Europe/London";
 

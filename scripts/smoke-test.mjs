@@ -578,7 +578,7 @@ assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: 
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ caller_number: "call me maybe" }) })).status === 400, "a non-numeric caller number should be rejected");
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ source: "twilio" }) })).status === 400, "only browser_test calls can be created from the dashboard");
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ voice: "brian" }) })).status === 400, "unknown voices are refused");
-assert(promptWithNumber.includes("ACCENT, NON-NEGOTIABLE: you are BRITISH") && promptWithNumber.includes("glottal T"), "the accent is pinned in the instructions");
+assert(promptWithNumber.includes("ACCENT: a natural, understated southern English accent") && promptWithNumber.includes("do not perform it"), "the accent is pinned in the instructions without caricature");
 assert(promptWithNumber.includes("NEVER call end_call in the same turn as a question"), "hanging up before the goodbye is forbidden");
 
 // Session without an OpenAI key fails clearly and closes the call.

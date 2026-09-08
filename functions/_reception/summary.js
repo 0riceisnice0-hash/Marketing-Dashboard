@@ -140,7 +140,7 @@ export function openAiErrorMessage(status, bodyText = "") {
     detail = "";
   }
   detail = String(detail).replace(/sk-[A-Za-z0-9_-]+/g, "[key]").slice(0, 200);
-  if (status === 401) return "OpenAI rejected the dashboard's API key (401). Check OPENAI_API_KEY in Cloudflare.";
+  if (status === 401) return `OpenAI rejected the dashboard's API key (401). Check OPENAI_API_KEY in Cloudflare.${detail ? ` OpenAI said: ${detail}` : ""}`;
   if (status === 403) return `OpenAI refused the request (403). ${detail}`.trim();
   if (status === 404) return `OpenAI could not find the requested model (404). ${detail}`.trim();
   if (status === 429) return "OpenAI rate limit or quota reached (429). Try again shortly.";

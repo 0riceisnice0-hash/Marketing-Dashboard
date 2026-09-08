@@ -29,6 +29,10 @@ export const DEFAULT_VOICE = "marin";
 // 20 audio tokens a second, so 400 is about 20 seconds of speech: a safety
 // net against monologues, well above a normal two-sentence turn.
 export const DEFAULT_MAX_OUTPUT_TOKENS = 400;
+// A call is cut off at this length. The transport asks the receptionist to
+// wrap up WRAP_UP_SECONDS before the limit, then ends the call regardless.
+export const DEFAULT_MAX_CALL_SECONDS = 180;
+export const WRAP_UP_SECONDS = 20;
 const CLIENT_SECRET_TTL_SECONDS = 300;
 const MAX_TRANSCRIPT_ENTRIES = 600;
 const MAX_MESSAGE_LENGTH = 4000;
@@ -75,6 +79,7 @@ export function receptionConfig(env) {
     voice: text(env.OPENAI_REALTIME_VOICE, 40) || DEFAULT_VOICE,
     turnDetection: turnDetectionConfig(env).type,
     maxOutputTokens: maxOutputTokens(env),
+    maxCallSeconds: maxCallSeconds(env),
     notificationTo: text(env.RECEPTION_NOTIFICATION_TO, 160) || DEFAULT_NOTIFICATION_TO,
     notificationProvider: "simulated",
     greeting: RECEPTIONIST_GREETING
@@ -84,6 +89,11 @@ export function receptionConfig(env) {
 function maxOutputTokens(env) {
   const requested = Number(env.OPENAI_REALTIME_MAX_OUTPUT_TOKENS);
   return Number.isFinite(requested) && requested >= 50 && requested <= 4096 ? Math.round(requested) : DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
+function maxCallSeconds(env) {
+  const requested = Number(env.RECEPTION_MAX_CALL_SECONDS);
+  return Number.isFinite(requested) && requested >= 60 && requested <= 900 ? Math.round(requested) : DEFAULT_MAX_CALL_SECONDS;
 }
 
 function turnDetectionConfig(env) {
@@ -176,7 +186,12 @@ async function createSession(env, id, user) {
   }
 
   const config = receptionConfig(env);
-  const instructions = buildReceptionistInstructions({ callerNumber: call.caller_number, source: call.source, now: new Date() });
+  const instructions = buildReceptionistInstructions({
+    callerNumber: call.caller_number,
+    source: call.source,
+    now: new Date(),
+    maxCallSeconds: maxCallSeconds(env)
+  });
   const noiseReduction = text(env.OPENAI_REALTIME_NOISE_REDUCTION, 20) || "far_field";
   const payload = {
     expires_after: { anchor: "created_at", seconds: CLIENT_SECRET_TTL_SECONDS },
@@ -238,6 +253,7 @@ async function createSession(env, id, user) {
     transcribe_model: config.transcribeModel,
     turn_detection: payload.session.audio.input.turn_detection.type,
     max_output_tokens: payload.session.max_output_tokens,
+    max_call_seconds: maxCallSeconds(env),
     expires_at: data.expires_at || null
   });
 
@@ -248,7 +264,9 @@ async function createSession(env, id, user) {
     expires_at: data.expires_at || null,
     model: config.realtimeModel,
     voice: config.voice,
-    greeting: RECEPTIONIST_GREETING
+    greeting: RECEPTIONIST_GREETING,
+    max_call_seconds: maxCallSeconds(env),
+    wrap_up_seconds: WRAP_UP_SECONDS
   });
 }
 
@@ -270,6 +288,13 @@ export async function runReceptionTool(env, name, args = {}) {
         : "No verified Fenster information matches this question. Say you do not have that information to hand and offer to take a message for the team."
     };
   }
+  if (name === "end_call") {
+    // The transport does the actual hanging up (closing the browser session
+    // now, dropping the telephone leg later). The tool just records intent.
+    const allowed = ["message_taken", "question_answered", "caller_finished", "time_limit", "abusive_caller", "other"];
+    const reason = allowed.includes(args?.reason) ? args.reason : "other";
+    return { ok: true, hang_up: true, reason };
+  }
   const error = new Error(`Unknown tool: ${name || "(none)"}`);
   error.status = 400;
   throw error;
@@ -285,7 +310,7 @@ async function runTool(env, request, id) {
   const args = body.arguments && typeof body.arguments === "object" && !Array.isArray(body.arguments) ? body.arguments : {};
   try {
     const output = await runReceptionTool(env, name, args);
-    await logEvent(env, id, "tool.called", { name, query: text(args.query, 200), results: output.results?.length || 0 });
+    await logEvent(env, id, "tool.called", { name, query: text(args.query, 200), reason: text(args.reason, 40), results: output.results?.length || 0 });
     return json({ output });
   } catch (error) {
     await logEvent(env, id, "tool.failed", { name, message: String(error?.message || error).slice(0, 200) });

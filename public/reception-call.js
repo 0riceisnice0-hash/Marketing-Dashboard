@@ -34,7 +34,8 @@ export class BrowserTestCall {
       transcript: options.onTranscript || (() => {}),
       error: options.onError || (() => {}),
       level: options.onLevel || (() => {}),
-      notice: options.onNotice || (() => {})
+      notice: options.onNotice || (() => {}),
+      ended: options.onEnded || (() => {})
     };
 
     this.callId = null;
@@ -56,6 +57,11 @@ export class BrowserTestCall {
     this.audioContext = null;
     this.analyser = null;
     this.levelFrame = 0;
+
+    this.maxCallSeconds = 180;
+    this.wrapUpSeconds = 20;
+    this.limitTimers = [];
+    this.hangup = null;            // set once the receptionist calls end_call
 
     this.entries = [];             // structured transcript, in conversation order
     this.entriesById = new Map();
@@ -157,6 +163,8 @@ export class BrowserTestCall {
     if (!session?.client_secret) throw new Error(session?.error || "No session credentials were returned.");
     this.model = session.model || "";
     this.greeting = session.greeting || "";
+    if (Number(session.max_call_seconds) >= 60) this.maxCallSeconds = Number(session.max_call_seconds);
+    if (Number(session.wrap_up_seconds) >= 5) this.wrapUpSeconds = Number(session.wrap_up_seconds);
     return session;
   }
 
@@ -215,6 +223,7 @@ export class BrowserTestCall {
     await channelOpen;
 
     this.connectedAt = new Date().toISOString();
+    this.startCallLimit();
     this.setPhase("live", "thinking", "Connected. The receptionist is answering...");
     // The session's instructions carry the exact greeting; asking for a
     // response is what makes the receptionist speak first.
@@ -240,6 +249,7 @@ export class BrowserTestCall {
         return;
 
       case "input_audio_buffer.speech_started":
+        if (this.hangup) return;
         if (this.ai === "speaking") this.stats.interruptions += 1;
         this.setAi("listening");
         return;
@@ -320,6 +330,10 @@ export class BrowserTestCall {
         return;
 
       case "output_audio_buffer.stopped":
+        if (this.hangup) {
+          this.finishHangup(500);
+          return;
+        }
         this.setAi("listening");
         return;
 
@@ -349,10 +363,14 @@ export class BrowserTestCall {
 
   handleResponseDone(response) {
     const calls = (response.output || []).filter((item) => item.type === "function_call");
-    if (calls.length) {
-      for (const call of calls) this.runTool(call);
+    const hangup = calls.find((call) => call.name === "end_call");
+    const others = calls.filter((call) => call.name !== "end_call");
+    for (const call of others) this.runTool(call);
+    if (hangup) {
+      this.requestHangup(hangup);
       return;
     }
+    if (others.length) return;
     if (response.status === "failed") {
       const detail = response.status_details?.error?.message || "The receptionist could not produce a reply.";
       this.notice(`Reply failed: ${detail}`);
@@ -386,6 +404,71 @@ export class BrowserTestCall {
       item: { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(output) }
     });
     this.send({ type: "response.create" });
+  }
+
+  /*
+   * The receptionist asked to hang up. Let whatever it is saying finish
+   * playing, then end the call. A failsafe ends it anyway if no
+   * output_audio_buffer.stopped ever arrives.
+   */
+  requestHangup(call) {
+    if (this.hangup || this.phase !== "live") return;
+    let reason = "other";
+    try { reason = JSON.parse(call.arguments || "{}").reason || "other"; } catch { reason = "other"; }
+    this.hangup = { reason, at: Date.now() };
+    this.api(`/api/reception/calls/${this.callId}/tool`, { method: "POST", body: { name: "end_call", arguments: { reason } } }).catch(() => {});
+    this.notice("The receptionist is ending the call.");
+    this.stats.assistant_hung_up = 1;
+    if (this.ai === "speaking") {
+      this.hangup.failsafe = setTimeout(() => this.finishHangup(0), 12000);
+    } else {
+      this.finishHangup(700);
+    }
+  }
+
+  finishHangup(delayMs) {
+    if (!this.hangup || this.hangup.finishing) return;
+    this.hangup.finishing = true;
+    if (this.hangup.failsafe) clearTimeout(this.hangup.failsafe);
+    setTimeout(() => this.end(`assistant_hung_up:${this.hangup.reason}`), delayMs);
+  }
+
+  /*
+   * Hard time limit. Shortly before it the receptionist is told to wrap up
+   * (a system message plus a nudge to respond); at the limit the call ends
+   * whatever is happening.
+   */
+  startCallLimit() {
+    const wrapUpAt = Math.max(5, this.maxCallSeconds - this.wrapUpSeconds) * 1000;
+    this.limitTimers.push(setTimeout(() => {
+      if (this.phase !== "live" || this.hangup) return;
+      this.notice(`Time limit approaching: the receptionist has been asked to wrap up (${this.maxCallSeconds}s limit).`);
+      this.reportEvent("time_limit_warning", { max_call_seconds: this.maxCallSeconds });
+      this.send({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "system",
+          content: [{
+            type: "input_text",
+            text: "TIME LIMIT REACHED. This call must end now. In one short sentence tell the caller the team will pick this up when the office reopens, say goodbye, and call end_call."
+          }]
+        }
+      });
+      this.send({ type: "response.create" });
+    }, wrapUpAt));
+    this.limitTimers.push(setTimeout(() => {
+      if (this.phase !== "live") return;
+      this.notice("Time limit reached. Ending the call.");
+      this.reportEvent("time_limit_reached", { max_call_seconds: this.maxCallSeconds });
+      this.end("time_limit");
+    }, this.maxCallSeconds * 1000));
+  }
+
+  clearCallLimit() {
+    for (const timer of this.limitTimers) clearTimeout(timer);
+    this.limitTimers = [];
+    if (this.hangup?.failsafe) clearTimeout(this.hangup.failsafe);
   }
 
   handleRealtimeError(error) {
@@ -426,8 +509,14 @@ export class BrowserTestCall {
 
   async performEnd(reason) {
     this.lastEndReason = reason;
+    this.clearCallLimit();
     const wasLive = this.phase === "live" || this.phase === "connecting";
-    this.setPhase("ending", "idle", "Ending the call...");
+    const endingMessage = reason.startsWith("assistant_hung_up")
+      ? "The receptionist ended the call."
+      : reason === "time_limit"
+        ? "Time limit reached. Ending the call."
+        : "Ending the call...";
+    this.setPhase("ending", "idle", endingMessage);
     this.endedAt = new Date().toISOString();
     this.markLatestAssistantPartial();
     await this.teardownMedia();
@@ -464,6 +553,7 @@ export class BrowserTestCall {
       if (!response.ok) throw new Error(data.error || `Saving the call failed (HTTP ${response.status}).`);
       this.result = data;
       this.setPhase("ended", "idle", "Call saved.");
+      this.handlers.ended(data);
       return data;
     } catch (error) {
       const message = `The call ended but could not be saved: ${error.message}`;
@@ -476,6 +566,7 @@ export class BrowserTestCall {
 
   async teardownMedia() {
     this.stopLevelMeter();
+    this.clearCallLimit();
     try { this.dc?.close(); } catch { /* already closed */ }
     try { this.pc?.close(); } catch { /* already closed */ }
     for (const track of this.stream?.getTracks?.() || []) {

@@ -555,6 +555,10 @@ assert(promptWithNumber.includes("07700 900123") && promptWithNumber.includes("b
 assert(promptWithNumber.includes("Thanks for calling Fenster Glazing. Our office is currently closed"), "instructions should carry the greeting");
 assert(!/Chief Meow Officer|purr|meow/i.test(promptWithNumber), "the receptionist must not inherit Legend's cat persona");
 assert(promptWithNumber.includes("Nick Baker, Sales Director"), "the published team roster is in the instructions");
+assert(promptWithNumber.includes("end_call") && promptWithNumber.includes("You end the call, not the caller"), "the receptionist is told to hang up itself");
+assert(promptWithNumber.includes("do not ask whether it is urgent or time-sensitive"), "the receptionist must not ask about urgency");
+assert(promptWithNumber.includes("on this number") && promptWithNumber.includes("do not read the digits out"), "a supplied caller number is never read back");
+assert(promptWithNumber.includes("Calls are limited to about 3 minutes"), "the time limit is explained to the receptionist");
 
 // Unauthenticated access is refused everywhere.
 assert((await call("/api/reception/state")).status === 401, "reception state must require a session");
@@ -605,6 +609,8 @@ assert((secretRequest.init.headers.authorization || secretRequest.init.headers.A
 assert(secretRequest.body.session.type === "realtime" && secretRequest.body.session.model === "gpt-realtime-2.1", "session config should target a realtime session");
 assert(secretRequest.body.session.instructions.includes("07700 900123"), "the caller number reaches the receptionist instructions");
 assert(secretRequest.body.session.tools.some((tool) => tool.name === "search_fenster_knowledge"), "the knowledge tool is exposed to the voice model");
+assert(secretRequest.body.session.tools.some((tool) => tool.name === "end_call"), "the hang-up tool is exposed to the voice model");
+assert(sessionJson.max_call_seconds === 180 && sessionJson.wrap_up_seconds === 20, "the transport is told the call time limit");
 assert(secretRequest.body.session.audio.input.transcription.model === "gpt-4o-transcribe", "input transcription is enabled");
 assert(secretRequest.body.session.audio.input.turn_detection.interrupt_response === true, "barge-in must be enabled");
 assert(secretRequest.body.expires_after.seconds === 300, "client secrets should be short-lived");
@@ -618,6 +624,8 @@ assert(toolCall.status === 200, "knowledge tool should run");
 const toolJson = await toolCall.json();
 assert(toolJson.output.found === true && /Bedfordshire/.test(toolJson.output.results[0].answer), "Bedford should be answered with the verified coverage fact");
 assert((await call(`/api/reception/calls/${createdCall.id}/tool`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ name: "drop_database", arguments: {} }) })).status === 400, "unknown tools are refused");
+const hangupTool = await call(`/api/reception/calls/${createdCall.id}/tool`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ name: "end_call", arguments: { reason: "message_taken" } }) });
+assert(hangupTool.status === 200 && (await hangupTool.json()).output.hang_up === true, "end_call tells the transport to hang up");
 
 // Finalise: malformed, then the real transcript. The call is backdated so the
 // duration maths has something to measure.

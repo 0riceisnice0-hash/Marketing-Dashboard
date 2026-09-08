@@ -3347,7 +3347,8 @@ function rcConsole() {
             <span>Simulated caller number <span class="rc-optional">optional</span></span>
             <input id="rc-caller-number" type="tel" inputmode="tel" placeholder="07700 900123" maxlength="32" autocomplete="off" data-dashboard-draft="reception-caller-number">
           </label>
-          <p>A real phone line supplies the caller's number automatically. Enter one here to rehearse that: the receptionist will confirm it as the callback number instead of asking for it. Leave it blank and the receptionist asks for a number when one is needed.</p>
+          <p>A real phone line supplies the caller's number automatically. Enter one here to rehearse that: the receptionist will offer a callback "on this number" instead of asking for it. Leave it blank and the receptionist asks for a number when one is needed.</p>
+          <p>The receptionist hangs up itself after its goodbye. Calls are limited to ${escapeHtml(String(Math.round((config.maxCallSeconds || 180) / 60)))} minutes; it is asked to wrap up shortly before, then cut off. Use headphones if you can: the laptop speakers can leak the receptionist's voice back into the microphone and confuse the transcript.</p>
           <p class="rc-setup__greeting"><strong>Greeting:</strong> “${escapeHtml(config.greeting || "Thanks for calling Fenster Glazing. Our office is currently closed…")}”</p>
         </div>` : ""}
       ${finished ? rcResult() : ""}
@@ -3458,7 +3459,7 @@ function rcResult() {
     <section class="rc-result">
       <div class="rc-result__head">
         <div>
-          <span>Call saved</span>
+          <span>${rcEndReasonLabel(call.end_reason)}</span>
           <h4>${escapeHtml(call.topic || (result.empty ? "No conversation" : "Call recorded"))}${call.caller_name ? ` · ${escapeHtml(call.caller_name)}` : ""}</h4>
           <p>${result.empty
             ? "The call ended before the caller said anything, so no summary or email was generated."
@@ -3480,6 +3481,13 @@ function rcResult() {
       </div>
     </section>
   `;
+}
+
+function rcEndReasonLabel(reason = "") {
+  if (reason.startsWith("assistant_hung_up")) return "Call saved · the receptionist hung up";
+  if (reason === "time_limit") return "Call saved · time limit reached";
+  if (reason === "connection_lost") return "Call saved · connection lost";
+  return "Call saved";
 }
 
 // Pushes the current live state into the console without rebuilding it, so
@@ -3575,6 +3583,13 @@ async function receptionStart() {
       receptionLive.notices.push(message);
       const notices = $("#rc-notices");
       if (notices) notices.innerHTML = rcNotices();
+    },
+    // Fires for every way a call can end: the End Call button, the
+    // receptionist hanging up, the time limit, a lost connection.
+    onEnded: (result) => {
+      receptionLive.result = result;
+      renderReception();
+      loadReception(true);
     }
   });
   receptionLiveCall = call;
@@ -3591,13 +3606,10 @@ async function receptionEnd(reason = "caller_ended") {
   const call = receptionLiveCall;
   if (!call || !call.isActive) return;
   try {
-    const result = await call.end(reason);
-    receptionLive.result = result;
+    await call.end(reason);
   } catch {
-    // Saved state is already reflected in the console via onError.
+    // onError and onEnded keep the console in step.
   }
-  renderReception();
-  loadReception(true);
 }
 
 function receptionMute() {

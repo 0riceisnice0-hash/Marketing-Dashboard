@@ -165,6 +165,7 @@ Meta bot). Optional receptionist settings, all plain environment variables:
 - `OPENAI_REALTIME_VAD` (`semantic_vad`, the default, or `server_vad`)
 - `OPENAI_REALTIME_NOISE_REDUCTION` (`far_field`, the default for a laptop microphone, or `near_field`)
 - `OPENAI_REALTIME_MAX_OUTPUT_TOKENS` (default `400`, roughly 20 seconds of speech; the hard cap on one reply)
+- `RECEPTION_MAX_CALL_SECONDS` (default `180`; the receptionist is asked to wrap up 20 seconds before, then the call is cut off)
 - `RECEPTION_NOTIFICATION_TO` (default `info@fensterglazing.com`)
 
 To add the OpenAI secret to the Pages project if it is ever missing:
@@ -378,7 +379,8 @@ What happens on **Test Call → Start Test Call**:
 5. Realtime transcription events build a structured in-memory transcript
    (never scraped from the DOM). The voice model may call one tool,
    `search_fenster_knowledge`, which the browser relays to
-   `POST /api/reception/calls/:id/tool`.
+   `POST /api/reception/calls/:id/tool`, and one hang-up tool, `end_call`,
+   which the receptionist calls after its goodbye so it ends the call itself.
 6. **End Call** closes the microphone, audio and WebRTC resources, then
    `POST /api/reception/calls/:id/finalise` stores the transcript,
    summarises it server-side with the Responses API (Structured Outputs),

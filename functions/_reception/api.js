@@ -12,6 +12,11 @@
  *   POST   calls/:id/summarise         re-run summary and notification
  *   POST   calls/:id/event             client-side technical log entry
  *
+ * The exported helpers (createCallRecord, buildRealtimeSessionConfig,
+ * finaliseCallRecord, runReceptionTool, processCall, logEvent) are shared with
+ * the telephony Worker in workers/reception-telephony, so a browser test call
+ * and a real telephone call run through exactly the same pipeline.
+ *
  * The browser only ever receives a short-lived Realtime client secret. The
  * OPENAI_API_KEY secret is used here, server-side, and never returned.
  */
@@ -38,6 +43,7 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 400;
 // wrap up WRAP_UP_SECONDS before the limit, then ends the call regardless.
 export const DEFAULT_MAX_CALL_SECONDS = 180;
 export const WRAP_UP_SECONDS = 20;
+export const CALL_SOURCES = ["browser_test", "twilio", "focus", "sip"];
 const CLIENT_SECRET_TTL_SECONDS = 300;
 const MAX_TRANSCRIPT_ENTRIES = 600;
 const MAX_MESSAGE_LENGTH = 4000;
@@ -46,7 +52,7 @@ const CALL_COLUMNS = new Set([
   "status", "ended_at", "duration_seconds", "end_reason", "caller_number", "called_number", "caller_name",
   "callback_number", "caller_email", "postcode", "requested_person", "topic", "summary", "message",
   "action_required", "urgency", "resolved_during_call", "summary_status", "summary_error", "summary_model",
-  "notification_status", "realtime_model", "metadata_json"
+  "notification_status", "realtime_model", "metadata_json", "external_call_id"
 ]);
 
 export async function reception(context, route, user) {
@@ -86,6 +92,7 @@ export function receptionConfig(env) {
     turnDetection: turnDetectionConfig(env).type,
     maxOutputTokens: maxOutputTokens(env),
     maxCallSeconds: maxCallSeconds(env),
+    wrapUpSeconds: WRAP_UP_SECONDS,
     notificationTo: text(env.RECEPTION_NOTIFICATION_TO, 160) || DEFAULT_NOTIFICATION_TO,
     notificationProvider: "simulated",
     greeting: RECEPTIONIST_GREETING
@@ -122,6 +129,41 @@ function turnDetectionConfig(env) {
   };
 }
 
+/*
+ * The Realtime session for one call: the same object whether it is sent to
+ * /v1/realtime/client_secrets for a browser test or to
+ * /v1/realtime/calls/{id}/accept for a telephone call.
+ */
+export function buildRealtimeSessionConfig(env, call) {
+  const config = receptionConfig(env);
+  const metadata = parseJson(call.metadata_json);
+  const voice = REALTIME_VOICES.includes(metadata.voice) ? metadata.voice : config.voice;
+  const instructions = buildReceptionistInstructions({
+    callerNumber: call.caller_number,
+    source: call.source,
+    now: new Date(),
+    maxCallSeconds: config.maxCallSeconds
+  });
+  const noiseReduction = text(env.OPENAI_REALTIME_NOISE_REDUCTION, 20) || "far_field";
+  return {
+    type: "realtime",
+    model: config.realtimeModel,
+    instructions,
+    output_modalities: ["audio"],
+    audio: {
+      input: {
+        transcription: { model: config.transcribeModel, language: "en", prompt: TRANSCRIPTION_HINT },
+        noise_reduction: { type: noiseReduction },
+        turn_detection: turnDetectionConfig(env)
+      },
+      output: { voice }
+    },
+    tools: RECEPTION_TOOLS,
+    tool_choice: "auto",
+    max_output_tokens: config.maxOutputTokens
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -144,6 +186,7 @@ async function receptionState(env) {
   const stats = {
     total: calls.length,
     today: calls.filter((call) => String(call.started_at).slice(0, 10) === today).length,
+    telephone: calls.filter((call) => call.source !== "browser_test").length,
     needsAction: completed.filter((call) => call.summary_status === "completed" && !call.resolved_during_call && !/^no action required/i.test(call.action_required || "")).length,
     simulatedNotifications: calls.filter((call) => call.notification_status === "simulated").length,
     failedSummaries: calls.filter((call) => call.summary_status === "failed").length
@@ -170,21 +213,45 @@ async function createCall(env, request, user) {
     return json({ error: `Unknown voice. Choose one of: ${REALTIME_VOICES.join(", ")}` }, 400);
   }
 
+  const call = await createCallRecord(env, {
+    source,
+    callerNumber,
+    startedBy: user?.name || "",
+    metadata: {
+      simulated_caller_number: Boolean(callerNumber),
+      started_from: "dashboard",
+      client: text(body.client, 160),
+      voice: requestedVoice || ""
+    }
+  });
+  return json({ call: presentCall(call) }, 201);
+}
+
+/*
+ * Creates the call row every transport starts from. `source` says which
+ * transport; `externalCallId` is the carrier's or OpenAI's own reference.
+ */
+export async function createCallRecord(env, input = {}) {
+  const source = CALL_SOURCES.includes(input.source) ? input.source : "browser_test";
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const metadata = {
-    simulated_caller_number: Boolean(callerNumber),
-    started_from: "dashboard",
-    client: text(body.client, 160),
-    voice: requestedVoice || ""
-  };
+  const metadata = input.metadata && typeof input.metadata === "object" ? input.metadata : {};
 
   await env.DB.prepare(
     "INSERT INTO reception_calls (id, source, external_call_id, status, started_at, caller_number, called_number, started_by, realtime_model, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-  ).bind(id, source, "", "in_progress", now, callerNumber, "", user?.name || "", receptionConfig(env).realtimeModel, JSON.stringify(metadata), now, now).run();
+  ).bind(
+    id, source, text(input.externalCallId, 120), "in_progress", now,
+    text(input.callerNumber, 40), text(input.calledNumber, 40), text(input.startedBy, 80),
+    receptionConfig(env).realtimeModel, JSON.stringify(metadata), now, now
+  ).run();
 
-  await logEvent(env, id, "call.created", { by: user?.name || "", source, simulated_caller_number: Boolean(callerNumber) });
-  return json({ call: presentCall(await loadCall(env, id)) }, 201);
+  await logEvent(env, id, "call.created", {
+    by: text(input.startedBy, 80),
+    source,
+    external_call_id: text(input.externalCallId, 120),
+    caller_number: text(input.callerNumber, 40) ? "supplied" : "none"
+  });
+  return loadCall(env, id);
 }
 
 async function createSession(env, id, user) {
@@ -198,35 +265,8 @@ async function createSession(env, id, user) {
   }
 
   const config = receptionConfig(env);
-  const callMetadata = parseJson(call.metadata_json);
-  const voice = REALTIME_VOICES.includes(callMetadata.voice) ? callMetadata.voice : config.voice;
-  const instructions = buildReceptionistInstructions({
-    callerNumber: call.caller_number,
-    source: call.source,
-    now: new Date(),
-    maxCallSeconds: maxCallSeconds(env)
-  });
-  const noiseReduction = text(env.OPENAI_REALTIME_NOISE_REDUCTION, 20) || "far_field";
-  const payload = {
-    expires_after: { anchor: "created_at", seconds: CLIENT_SECRET_TTL_SECONDS },
-    session: {
-      type: "realtime",
-      model: config.realtimeModel,
-      instructions,
-      output_modalities: ["audio"],
-      audio: {
-        input: {
-          transcription: { model: config.transcribeModel, language: "en", prompt: TRANSCRIPTION_HINT },
-          noise_reduction: { type: noiseReduction },
-          turn_detection: turnDetectionConfig(env)
-        },
-        output: { voice }
-      },
-      tools: RECEPTION_TOOLS,
-      tool_choice: "auto",
-      max_output_tokens: maxOutputTokens(env)
-    }
-  };
+  const session = buildRealtimeSessionConfig(env, call);
+  const payload = { expires_after: { anchor: "created_at", seconds: CLIENT_SECRET_TTL_SECONDS }, session };
 
   let response;
   try {
@@ -262,12 +302,13 @@ async function createSession(env, id, user) {
   await updateCall(env, id, { realtime_model: config.realtimeModel });
   await logEvent(env, id, "session.created", {
     by: user?.name || "",
-    model: config.realtimeModel,
-    voice,
-    transcribe_model: config.transcribeModel,
-    turn_detection: payload.session.audio.input.turn_detection.type,
-    max_output_tokens: payload.session.max_output_tokens,
-    max_call_seconds: maxCallSeconds(env),
+    transport: "browser_webrtc",
+    model: session.model,
+    voice: session.audio.output.voice,
+    transcribe_model: session.audio.input.transcription.model,
+    turn_detection: session.audio.input.turn_detection.type,
+    max_output_tokens: session.max_output_tokens,
+    max_call_seconds: config.maxCallSeconds,
     expires_at: data.expires_at || null
   });
 
@@ -276,18 +317,18 @@ async function createSession(env, id, user) {
   return json({
     client_secret: data.value,
     expires_at: data.expires_at || null,
-    model: config.realtimeModel,
-    voice,
+    model: session.model,
+    voice: session.audio.output.voice,
     greeting: RECEPTIONIST_GREETING,
-    max_call_seconds: maxCallSeconds(env),
+    max_call_seconds: config.maxCallSeconds,
     wrap_up_seconds: WRAP_UP_SECONDS
   });
 }
 
 /*
  * Tool execution for the live voice model. The model has no database access;
- * it can only call the small allowlist below, and the browser relays the call
- * here. A telephone transport would call runReceptionTool directly.
+ * it can only call the small allowlist below. The browser relays calls here
+ * over HTTP; the telephony Worker calls this function directly.
  */
 export async function runReceptionTool(env, name, args = {}) {
   if (name === "search_fenster_knowledge") {
@@ -303,8 +344,8 @@ export async function runReceptionTool(env, name, args = {}) {
     };
   }
   if (name === "end_call") {
-    // The transport does the actual hanging up (closing the browser session
-    // now, dropping the telephone leg later). The tool just records intent.
+    // The transport does the actual hanging up (closing the browser session,
+    // or asking OpenAI to drop the SIP leg). The tool just records intent.
     const allowed = ["message_taken", "question_answered", "caller_finished", "time_limit", "abusive_caller", "other"];
     const reason = allowed.includes(args?.reason) ? args.reason : "other";
     return { ok: true, hang_up: true, reason };
@@ -345,16 +386,37 @@ async function finaliseCall(env, request, id, user) {
   }
   if (!Array.isArray(body.transcript)) return json({ error: "transcript must be an array of { role, body, at } entries" }, 400);
 
+  const result = await finaliseCallRecord(env, id, {
+    transcript: body.transcript,
+    endedAt: text(body.ended_at, 40),
+    connectedAt: text(body.connected_at, 40),
+    reason: text(body.reason, 60),
+    clientStats: body.client_stats,
+    by: user?.name || ""
+  });
+  return json({ call: presentCall(result.call, result.notification), empty: result.empty });
+}
+
+/*
+ * The end of every call, whatever the transport: store the transcript, close
+ * the record, then summarise and notify. Returns { call, notification, empty }.
+ */
+export async function finaliseCallRecord(env, id, input = {}) {
+  const call = await loadCall(env, id);
+  if (!call) throw new Error("Call not found");
+  if (call.status !== "in_progress") return { call, notification: await latestNotification(env, id), empty: false, already: true };
+
   const nowMs = Date.now();
   const startedMs = Date.parse(call.started_at) || nowMs;
-  const requestedEnd = Date.parse(text(body.ended_at, 40));
+  const requestedEnd = Date.parse(text(input.endedAt, 40));
   const endedMs = Number.isFinite(requestedEnd) && requestedEnd >= startedMs && requestedEnd <= nowMs + 60000 ? requestedEnd : nowMs;
-  const requestedConnected = Date.parse(text(body.connected_at, 40));
+  const requestedConnected = Date.parse(text(input.connectedAt, 40));
   const connectedMs = Number.isFinite(requestedConnected) && requestedConnected >= startedMs - 5000 && requestedConnected <= endedMs ? requestedConnected : null;
   const durationSeconds = Math.max(0, Math.round((endedMs - (connectedMs ?? startedMs)) / 1000));
   const endedAt = new Date(endedMs).toISOString();
+  const entries = Array.isArray(input.transcript) ? input.transcript : [];
 
-  const messages = normaliseTranscript(body.transcript, id);
+  const messages = normaliseTranscript(entries, id);
   await env.DB.prepare("DELETE FROM reception_call_messages WHERE call_id = ?").bind(id).run();
   for (const message of messages) {
     await env.DB.prepare(
@@ -365,26 +427,27 @@ async function finaliseCall(env, request, id, user) {
   const metadata = {
     ...parseJson(call.metadata_json),
     connected_at: connectedMs ? new Date(connectedMs).toISOString() : null,
-    ended_by: user?.name || "",
-    client_stats: compactStats(body.client_stats),
-    dropped_transcript_entries: Math.max(0, body.transcript.length - messages.length)
+    ended_by: text(input.by, 80),
+    client_stats: compactStats(input.clientStats),
+    dropped_transcript_entries: Math.max(0, entries.length - messages.length)
   };
   const hasCallerSpeech = messages.some((message) => message.role === "user");
+  const reason = text(input.reason, 60) || "caller_ended";
 
   await updateCall(env, id, {
     status: "completed",
     ended_at: endedAt,
     duration_seconds: durationSeconds,
-    end_reason: text(body.reason, 60) || "caller_ended",
+    end_reason: reason,
     metadata_json: JSON.stringify(metadata),
     summary_status: hasCallerSpeech ? "pending" : "skipped",
     notification_status: hasCallerSpeech ? "pending" : "skipped"
   });
   await logEvent(env, id, "call.finalised", {
-    by: user?.name || "",
+    by: text(input.by, 80),
     messages: messages.length,
     duration_seconds: durationSeconds,
-    reason: text(body.reason, 60) || "caller_ended"
+    reason
   });
 
   if (!hasCallerSpeech) {
@@ -396,18 +459,18 @@ async function finaliseCall(env, request, id, user) {
       resolved_during_call: 1
     });
     await logEvent(env, id, "summary.skipped", { reason: "empty_call" });
-    return json({ call: presentCall(await loadCall(env, id)), empty: true });
+    return { call: await loadCall(env, id), notification: null, empty: true };
   }
 
   await processCall(env, id);
-  return json({ call: presentCall(await loadCall(env, id), await latestNotification(env, id)) });
+  return { call: await loadCall(env, id), notification: await latestNotification(env, id), empty: false };
 }
 
 /*
  * Summary then notification, each failure recorded without losing the call.
  * Safe to run again: a completed notification is not duplicated.
  */
-async function processCall(env, id) {
+export async function processCall(env, id) {
   const call = await loadCall(env, id);
   const messages = await loadMessages(env, id);
 
@@ -517,11 +580,11 @@ async function clientEvent(env, request, id) {
 // Data helpers
 // ---------------------------------------------------------------------------
 
-async function loadCall(env, id) {
+export async function loadCall(env, id) {
   return env.DB.prepare("SELECT * FROM reception_calls WHERE id = ?").bind(id).first();
 }
 
-async function loadMessages(env, id) {
+export async function loadMessages(env, id) {
   const rows = await env.DB.prepare("SELECT * FROM reception_call_messages WHERE call_id = ? ORDER BY sequence ASC").bind(id).all();
   return [...(rows.results || [])].sort((a, b) => Number(a.sequence) - Number(b.sequence));
 }
@@ -532,7 +595,7 @@ async function latestNotification(env, id) {
   return list[0] || null;
 }
 
-async function updateCall(env, id, fields) {
+export async function updateCall(env, id, fields) {
   const keys = Object.keys(fields).filter((key) => CALL_COLUMNS.has(key));
   if (!keys.length) return;
   await env.DB.prepare(
@@ -540,7 +603,7 @@ async function updateCall(env, id, fields) {
   ).bind(...keys.map((key) => fields[key]), id).run();
 }
 
-async function failCall(env, id, reason) {
+export async function failCall(env, id, reason) {
   await updateCall(env, id, {
     status: "failed",
     ended_at: new Date().toISOString(),
@@ -550,7 +613,7 @@ async function failCall(env, id, reason) {
   });
 }
 
-async function logEvent(env, callId, type, detail = {}) {
+export async function logEvent(env, callId, type, detail = {}) {
   try {
     await env.DB.prepare("INSERT INTO reception_call_events (call_id, type, detail_json) VALUES (?, ?, ?)")
       .bind(callId, type, JSON.stringify(detail || {})).run();
@@ -559,7 +622,7 @@ async function logEvent(env, callId, type, detail = {}) {
   }
 }
 
-function presentCall(row, notification = null) {
+export function presentCall(row, notification = null) {
   if (!row) return null;
   const { metadata_json, ...call } = row;
   return {
@@ -613,17 +676,37 @@ function compactStats(value) {
   return stats;
 }
 
-function cleanPhone(value) {
+export function cleanPhone(value) {
   const cleaned = String(value || "").replace(/[^0-9+()\s-]/g, "").replace(/\s+/g, " ").trim().slice(0, 32);
   const digits = cleaned.replace(/\D/g, "");
   return digits.length >= 6 && digits.length <= 15 ? cleaned : "";
+}
+
+/*
+ * Carrier numbers arrive as +44 E.164. The receptionist and the office read
+ * UK numbers nationally, so +447700900123 becomes 07700 900123 and
+ * +441908429200 becomes 01908 429200. Anything else is kept as given.
+ */
+export function formatUkNumber(value) {
+  const raw = String(value || "").trim();
+  const digits = raw.replace(/[^\d+]/g, "");
+  let national = "";
+  if (/^\+44\d{10}$/.test(digits)) national = `0${digits.slice(3)}`;
+  else if (/^0044\d{10}$/.test(digits)) national = `0${digits.slice(4)}`;
+  else if (/^44\d{10}$/.test(digits)) national = `0${digits.slice(2)}`;
+  else if (/^0\d{10}$/.test(digits)) national = digits;
+  if (national) {
+    if (national.startsWith("02")) return `${national.slice(0, 3)} ${national.slice(3, 7)} ${national.slice(7)}`;
+    return `${national.slice(0, 5)} ${national.slice(5)}`;
+  }
+  return cleanPhone(raw);
 }
 
 function text(value, limit = 200) {
   return String(value ?? "").trim().slice(0, limit);
 }
 
-function parseJson(value) {
+export function parseJson(value) {
   try {
     const parsed = JSON.parse(value || "{}");
     return parsed && typeof parsed === "object" ? parsed : {};

@@ -1,6 +1,11 @@
+import { createHmac } from "node:crypto";
 import { onRequest } from "../functions/api/[[path]].js";
 import { searchFensterKnowledge } from "../functions/_reception/knowledge.js";
 import { officeStatus, buildReceptionistInstructions } from "../functions/_reception/prompt.js";
+import { formatUkNumber, createCallRecord, finaliseCallRecord, buildRealtimeSessionConfig } from "../functions/_reception/api.js";
+import { RealtimeSessionTracker } from "../functions/_reception/realtime-session.js";
+import { twilioSignature, validateTwilioRequest, buildOpenAiSipUri, dialTwiml } from "../workers/reception-telephony/src/twilio.js";
+import { verifyOpenAiWebhook, signOpenAiWebhook, sipHeaderMap, sipUser } from "../workers/reception-telephony/src/openai-webhook.js";
 
 const tables = {
   tickets: [],
@@ -757,6 +762,89 @@ assert(
 );
 tables.reception_calls.push({ id: "tel-0001", source: "twilio", status: "completed", started_at: new Date().toISOString(), metadata_json: "{}" });
 assert((await call("/api/reception/calls/tel-0001", { method: "DELETE", headers: { Cookie: cookie } })).status === 403, "telephone calls are protected from casual deletion");
+
+// ---------------------------------------------------------------------------
+// Telephone transport: Twilio -> OpenAI SIP -> reception-telephony Worker
+// ---------------------------------------------------------------------------
+
+// Twilio's signature: HMAC-SHA1 over URL + sorted params, base64. Checked
+// against Node's own HMAC as an independent reference implementation.
+const twilioExampleUrl = "https://mycompany.com/myapp.php?foo=1&bar=2";
+const twilioExampleParams = { CallSid: "CA1234567890ABCDE", Caller: "+12349013030", Digits: "1234", From: "+12349013030", To: "+18005551212" };
+const twilioReference = createHmac("sha1", "12345").update(Object.keys(twilioExampleParams).sort().reduce((acc, key) => acc + key + twilioExampleParams[key], twilioExampleUrl)).digest("base64");
+assert(await twilioSignature("12345", twilioExampleUrl, twilioExampleParams) === twilioReference, "Twilio signature must match the reference algorithm");
+assert(await validateTwilioRequest("12345", twilioExampleUrl, twilioExampleParams, twilioReference), "a genuine Twilio signature validates");
+assert(!(await validateTwilioRequest("12345", twilioExampleUrl, { ...twilioExampleParams, Digits: "9999" }, twilioReference)), "a tampered Twilio request is refused");
+
+const sipUri = buildOpenAiSipUri({ projectId: "proj_abc", headers: { "x-fenster-caller": "+447700900123", "x-fenster-called": "+441908429200", "x-fenster-twilio-call": "CA1", "not-allowed": "x" } });
+assert(sipUri === "sip:proj_abc@sip.api.openai.com;transport=tls?x-fenster-caller=%2B447700900123&x-fenster-called=%2B441908429200&x-fenster-twilio-call=CA1", `SIP URI should carry TLS and the x- headers (got ${sipUri})`);
+const twiml = dialTwiml({ sipUri, callerId: "+447700900123", actionUrl: "https://example.test/twilio/after" });
+assert(twiml.includes('<Dial answerOnBridge="true" timeout="25" callerId="+447700900123" action="https://example.test/twilio/after" method="POST">') && twiml.includes("&amp;x-fenster-called="), "TwiML dials OpenAI over SIP with the caller id and escaped headers");
+
+const webhookSecret = "whsec_" + Buffer.from("smoke-test-webhook-secret-32-bytes!").toString("base64");
+const webhookBody = JSON.stringify({ id: "evt_1", type: "realtime.call.incoming", data: { call_id: "rtc_smoke", sip_headers: [{ name: "From", value: "sip:+447700900123@sip.twilio.com;user=phone" }, { name: "x-fenster-twilio-call", value: "CA1" }] } });
+const webhookTs = String(Math.floor(Date.now() / 1000));
+const webhookSig = await signOpenAiWebhook(webhookSecret, "wh_1", webhookTs, webhookBody);
+const goodHeaders = new Headers({ "webhook-id": "wh_1", "webhook-timestamp": webhookTs, "webhook-signature": webhookSig });
+assert(await verifyOpenAiWebhook(webhookSecret, webhookBody, goodHeaders), "a correctly signed OpenAI webhook verifies");
+assert(!(await verifyOpenAiWebhook(webhookSecret, webhookBody + " ", goodHeaders)), "a tampered webhook body is refused");
+assert(!(await verifyOpenAiWebhook(webhookSecret, webhookBody, new Headers({ "webhook-id": "wh_1", "webhook-timestamp": String(Number(webhookTs) - 1000), "webhook-signature": webhookSig }))), "a stale webhook is refused");
+const sipHeaders = sipHeaderMap(JSON.parse(webhookBody).data.sip_headers);
+assert(sipUser(sipHeaders.from) === "+447700900123" && sipHeaders["x-fenster-twilio-call"] === "CA1", "SIP headers are parsed");
+assert(formatUkNumber("+447700900123") === "07700 900123" && formatUkNumber("+441908429200") === "01908 429200" && formatUkNumber("+442079460000") === "020 7946 0000", "carrier numbers are shown nationally");
+
+// The shared session tracker: transcript, tools, forced goodbye, hang-up.
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const trackerSent = [];
+const trackerTools = [];
+let trackerHungUp = "";
+const tracker = new RealtimeSessionTracker({
+  send: (event) => trackerSent.push(event),
+  runTool: async (name, args) => {
+    trackerTools.push({ name, args });
+    return name === "end_call" ? { ok: true, hang_up: true } : { found: true, results: [{ topic: "Areas", answer: "Yes" }] };
+  },
+  onHangup: async (reason) => { trackerHungUp = reason; },
+  hangupDelayMs: 0,
+  goodbyeTimeoutMs: 50
+});
+tracker.requestGreeting();
+assert(trackerSent[0]?.type === "response.create", "the greeting is requested with response.create");
+tracker.handle({ type: "response.output_item.added", item: { id: "a1", type: "message" } });
+tracker.handle({ type: "response.output_audio_transcript.delta", item_id: "a1", delta: "Hi, I'm an AI" });
+tracker.handle({ type: "response.output_audio_transcript.done", item_id: "a1", transcript: "Hi, I'm an AI automated assistant. How can I help?" });
+tracker.handle({ type: "input_audio_buffer.committed", item_id: "u1" });
+tracker.handle({ type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: "Do you cover Bedford?" });
+tracker.handle({ type: "response.done", response: { output: [{ type: "function_call", name: "search_fenster_knowledge", call_id: "c1", arguments: "{\"query\":\"Bedford\"}" }] } });
+await wait(5);
+assert(trackerTools[0]?.name === "search_fenster_knowledge" && trackerTools[0].args.query === "Bedford", "tool calls are run through runTool");
+assert(trackerSent.some((event) => event.type === "conversation.item.create" && event.item?.type === "function_call_output" && event.item.call_id === "c1"), "tool output goes back to the session");
+tracker.handle({ type: "response.done", response: { output: [
+  { type: "message", id: "a2", content: [{ type: "output_audio", transcript: "I'll pass that on." }] },
+  { type: "function_call", name: "end_call", call_id: "c2", arguments: "{\"reason\":\"message_taken\"}" }
+] } });
+assert(trackerSent.some((event) => event.item?.role === "system" && /Thanks for calling, bye/.test(event.item.content?.[0]?.text || "")), "a hang-up without a goodbye forces one");
+assert(trackerHungUp === "", "the call is not dropped before the goodbye");
+tracker.handle({ type: "response.output_item.added", item: { id: "a3", type: "message" } });
+tracker.handle({ type: "output_audio_buffer.started" });
+tracker.handle({ type: "response.output_audio_transcript.done", item_id: "a3", transcript: "Thanks for calling, bye." });
+tracker.handle({ type: "output_audio_buffer.stopped" });
+await wait(10);
+assert(trackerHungUp === "message_taken", `the call is dropped once the goodbye has played (got ${JSON.stringify(trackerHungUp)})`);
+assert(tracker.transcript.length === 3 && tracker.transcript[1].role === "user" && tracker.transcript[2].body === "Thanks for calling, bye.", `the tracker keeps the structured transcript (got ${JSON.stringify(tracker.transcript.map((turn) => turn.role))})`);
+tracker.dispose();
+
+// A telephone call through the shared pipeline.
+const phoneCall = await createCallRecord(env, { source: "twilio", externalCallId: "rtc_smoke", callerNumber: "07700 900123", calledNumber: "01908 429200", startedBy: "telephone", metadata: { transport: "openai_sip" } });
+assert(phoneCall.source === "twilio" && phoneCall.external_call_id === "rtc_smoke" && phoneCall.called_number === "01908 429200", "telephone calls record their source, carrier id and numbers");
+const phoneSession = buildRealtimeSessionConfig(env, phoneCall);
+assert(phoneSession.type === "realtime" && phoneSession.instructions.includes("07700 900123") && phoneSession.instructions.includes("This is a live telephone call") && phoneSession.tools.some((tool) => tool.name === "end_call"), "the SIP accept body is the same receptionist session");
+const phoneResult = await finaliseCallRecord(env, phoneCall.id, { transcript: transcript.slice(0, 4), reason: "assistant_hung_up:message_taken", by: "telephone", clientStats: { transport: "openai_sip" } });
+assert(phoneResult.call.status === "completed" && phoneResult.call.summary_status === "completed" && phoneResult.call.end_reason === "assistant_hung_up:message_taken", "telephone calls finalise through the same pipeline");
+assert(phoneResult.call.callback_number === "07700 900123" && phoneResult.notification?.status === "simulated", "the caller-id number is the callback number and the office email is simulated");
+const listedPhone = await (await call("/api/reception/state", { headers: { Cookie: cookie } })).json();
+assert(listedPhone.calls.some((item) => item.id === phoneCall.id && item.source === "twilio") && listedPhone.stats.telephone >= 1, "telephone calls appear in the dashboard list");
+assert((await call(`/api/reception/calls/${phoneCall.id}`, { method: "DELETE", headers: { Cookie: cookie } })).status === 403, "telephone calls cannot be deleted from the dashboard");
 
 console.log("Smoke test passed");
 

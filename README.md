@@ -76,6 +76,7 @@ scripts/
 
 workers/
   lead-email/         Separate Worker for sending lead emails.
+  reception-telephony/ Separate Worker: Twilio number -> OpenAI SIP -> receptionist.
 
 wrangler.toml         Cloudflare Pages/D1 config.
 package.json          Wrangler scripts.
@@ -412,6 +413,44 @@ deliberately not implemented yet.
 Testing: `npm run smoke` covers the whole API with the OpenAI boundary
 mocked (no live calls). A real microphone conversation has to be checked by
 hand on the live dashboard.
+
+### Telephone calls (Twilio → OpenAI SIP)
+
+Real calls use `workers/reception-telephony`, a separate Worker, because a
+call needs a connection held open for minutes and Pages Functions cannot do
+that (`waitUntil` stops after 30 seconds). The flow:
+
+1. The Twilio number's voice webhook points at the Worker's `/twilio/voice`.
+   The Worker checks Twilio's signature and replies with TwiML that dials
+   OpenAI's SIP endpoint over TLS, passing the caller's number and Twilio call
+   id as `x-fenster-*` SIP headers. No audio passes through Cloudflare.
+2. OpenAI sends `realtime.call.incoming` to the Worker's `/openai/webhook`.
+   A Durable Object per call creates the `reception_calls` row (source
+   `twilio`, `external_call_id` = OpenAI call id), accepts the call with the
+   same session config as a browser test, and holds the event WebSocket.
+3. The shared tracker (`functions/_reception/realtime-session.js`) keeps the
+   transcript, runs `search_fenster_knowledge`, and turns `end_call` into
+   `POST /v1/realtime/calls/{id}/hangup` after the goodbye. An alarm enforces
+   `RECEPTION_MAX_CALL_SECONDS`.
+4. When the stream closes the call is finalised through `finaliseCallRecord`:
+   transcript to D1, summary, simulated email. It appears in the dashboard
+   like any other call.
+
+Deploy and configure (from `workers/reception-telephony`):
+
+```bash
+npx wrangler deploy
+npx wrangler secret put OPENAI_API_KEY
+npx wrangler secret put OPENAI_WEBHOOK_SECRET
+npx wrangler secret put OPENAI_PROJECT_ID
+npx wrangler secret put TWILIO_AUTH_TOKEN
+```
+
+Then in OpenAI (platform.openai.com → project → Webhooks) add the Worker's
+`/openai/webhook` URL for `realtime.call.incoming` and copy the signing secret
+into `OPENAI_WEBHOOK_SECRET`; in Twilio set the number's voice webhook (HTTP
+POST) to the Worker's `/twilio/voice`. `GET /health` on the Worker reports
+which of the four settings are present without revealing them.
 
 ## Common Gotchas
 

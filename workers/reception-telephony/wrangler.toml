@@ -1,0 +1,36 @@
+# Fenster AI Receptionist: telephone transport.
+#
+# A Twilio number dials OpenAI's SIP endpoint; OpenAI handles the audio and
+# sends this Worker a webhook for each incoming call. A Durable Object per call
+# accepts it with the receptionist's session config, holds the event stream
+# for the length of the call (transcript, tools, hang-up, time limit) and
+# finalises the call into the same D1 tables the dashboard reads.
+#
+# Secrets (set with `npx wrangler secret put <NAME>` from this directory):
+#   OPENAI_API_KEY          same key the dashboard uses
+#   OPENAI_WEBHOOK_SECRET   from platform.openai.com > Webhooks (whsec_...)
+#   OPENAI_PROJECT_ID       the proj_... id whose SIP endpoint Twilio dials
+#   TWILIO_AUTH_TOKEN       validates that /twilio/voice requests come from Twilio
+#
+# Optional vars: OPENAI_SIP_HOST (default sip.api.openai.com), plus every
+# OPENAI_REALTIME_* / RECEPTION_* setting documented in the README.
+
+name = "fenster-reception-telephony"
+main = "src/index.js"
+compatibility_date = "2026-06-02"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "marketing_dashboard"
+database_id = "825e4746-f517-4634-8e61-67d6048f4394"
+
+[durable_objects]
+bindings = [{ name = "CALL_SESSIONS", class_name = "ReceptionCallSession" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ReceptionCallSession"]
+
+[vars]
+RECEPTION_NOTIFICATION_TO = "info@fensterglazing.com"

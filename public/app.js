@@ -3079,7 +3079,7 @@ function rcCalls() {
         <span>Test calls cannot start until the <code>OPENAI_API_KEY</code> secret is added to the Cloudflare Pages project. Saved calls below are still readable.</span>
       </div>` : ""}
     <div class="wt-kpis">
-      <article class="wt-kpi"><strong>${wtFmt(stats.total || 0)}</strong><span>Saved calls</span><small>${wtFmt(stats.today || 0)} today</small></article>
+      <article class="wt-kpi"><strong>${wtFmt(stats.total || 0)}</strong><span>Saved calls</span><small>${wtFmt(stats.today || 0)} today · ${wtFmt(stats.telephone || 0)} by telephone</small></article>
       <article class="wt-kpi"><strong>${wtFmt(stats.needsAction || 0)}</strong><span>Need follow-up</span><small>Action required by the team</small></article>
       <article class="wt-kpi"><strong>${wtFmt(stats.simulatedNotifications || 0)}</strong><span>Simulated emails</span><small>Recorded, none actually sent</small></article>
       <article class="wt-kpi wt-kpi--text"><strong>${escapeHtml(config.realtimeModel || "—")}</strong><span>Voice model</span><small>Summary: ${escapeHtml(config.summaryModel || "—")}</small></article>
@@ -3087,7 +3087,7 @@ function rcCalls() {
     ${receptionDetail ? rcDetail() : ""}
     <section class="wt-panel">
       <header class="wt-panel__head">
-        <div><h4>Receptionist calls</h4><p>Newest first. Every call here is a browser test until the telephone line is connected; the source column says which. Click a row for the transcript and the email that would have gone to ${escapeHtml(config.notificationTo || "info@fensterglazing.com")}.</p></div>
+        <div><h4>Receptionist calls</h4><p>Newest first. Browser tests and real telephone calls sit in the same list; the source column says which. Click a row for the transcript and the email that would have gone to ${escapeHtml(config.notificationTo || "info@fensterglazing.com")}.</p></div>
         <div class="tools-head__actions"><button class="tool-action" onclick="window.dashboardReceptionRefresh()">Refresh</button></div>
       </header>
       ${calls.length ? `
@@ -3218,7 +3218,8 @@ function rcDetail() {
     ["Started", formatDateTime(call.started_at)],
     ["Ended", call.ended_at ? formatDateTime(call.ended_at) : "—"],
     ["Duration", rcDuration(call.duration_seconds)],
-    ["Source", ({ browser_test: "browser_test (dashboard microphone test)" })[call.source] || call.source],
+    ["Source", ({ browser_test: "browser_test (dashboard microphone test)", twilio: "twilio (telephone call via Twilio and OpenAI SIP)" })[call.source] || call.source],
+    ["Called number", call.called_number],
     ["Caller number supplied", call.caller_number ? `${call.caller_number}${call.metadata?.simulated_caller_number ? " (simulated)" : ""}` : "None"],
     ["Voice model", `${call.realtime_model || ""}${call.metadata?.voice ? ` · voice ${call.metadata.voice}` : ""}`],
     ["Summary", ({ completed: `Completed (${call.summary_model || "model"})`, failed: "Failed", skipped: "Skipped (nothing to summarise)", pending: "Pending" })[call.summary_status] || call.summary_status],

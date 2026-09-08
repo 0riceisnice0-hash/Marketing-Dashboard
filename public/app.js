@@ -3429,14 +3429,17 @@ function rcCanRetrySave() {
 }
 
 function rcLiveTranscript() {
-  const entries = receptionLive.transcript.filter((entry) => entry.body.trim() || !entry.final);
+  // Caller turns are transcribed a moment after they are spoken; an empty
+  // placeholder bubble in the meantime reads as a glitch, so a turn only
+  // appears once it has words. Order is still the order the turns happened.
+  const entries = receptionLive.transcript.filter((entry) => entry.body.trim());
   if (!entries.length) {
     return `<p class="empty rc-stream__empty">${receptionLiveCall?.isActive ? "Waiting for the first words…" : "Nothing yet."}</p>`;
   }
   return entries.map((entry) => `
     <article class="rc-turn rc-turn--${entry.role === "assistant" ? "assistant" : "caller"} ${entry.final ? "" : "is-streaming"} ${entry.partial ? "is-partial" : ""}">
       <span class="rc-turn__who">${entry.role === "assistant" ? "Receptionist" : "Caller"}${entry.partial ? " · interrupted" : ""}</span>
-      <p>${escapeHtml(entry.body) || "<em>…</em>"}</p>
+      <p>${escapeHtml(entry.body)}</p>
     </article>
   `).join("");
 }

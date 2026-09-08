@@ -608,6 +608,9 @@ assert(secretRequest.body.session.tools.some((tool) => tool.name === "search_fen
 assert(secretRequest.body.session.audio.input.transcription.model === "gpt-4o-transcribe", "input transcription is enabled");
 assert(secretRequest.body.session.audio.input.turn_detection.interrupt_response === true, "barge-in must be enabled");
 assert(secretRequest.body.expires_after.seconds === 300, "client secrets should be short-lived");
+assert(secretRequest.body.session.max_output_tokens === 400, "replies are capped so the receptionist cannot monologue");
+assert(/Fenster Glazing/.test(secretRequest.body.session.audio.input.transcription.prompt || ""), "the transcriber gets a Fenster vocabulary hint");
+assert(promptWithNumber.indexOf("be brief") < promptWithNumber.indexOf("# Situation"), "brevity is the first rule in the instructions");
 
 // Tools: allowlisted, verified answers only.
 const toolCall = await call(`/api/reception/calls/${createdCall.id}/tool`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ name: "search_fenster_knowledge", arguments: { query: "Do you cover Bedford?" } }) });

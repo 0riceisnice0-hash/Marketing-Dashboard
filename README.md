@@ -164,6 +164,7 @@ Meta bot). Optional receptionist settings, all plain environment variables:
 - `OPENAI_REALTIME_VOICE` (default `marin`)
 - `OPENAI_REALTIME_VAD` (`semantic_vad`, the default, or `server_vad`)
 - `OPENAI_REALTIME_NOISE_REDUCTION` (`far_field`, the default for a laptop microphone, or `near_field`)
+- `OPENAI_REALTIME_MAX_OUTPUT_TOKENS` (default `400`, roughly 20 seconds of speech; the hard cap on one reply)
 - `RECEPTION_NOTIFICATION_TO` (default `info@fensterglazing.com`)
 
 To add the OpenAI secret to the Pages project if it is ever missing:

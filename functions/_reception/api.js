@@ -17,7 +17,7 @@
  */
 
 import { json } from "../_lib/http.js";
-import { buildReceptionistInstructions, RECEPTION_TOOLS, RECEPTIONIST_GREETING } from "./prompt.js";
+import { buildReceptionistInstructions, RECEPTION_TOOLS, RECEPTIONIST_GREETING, TRANSCRIPTION_HINT } from "./prompt.js";
 import { searchFensterKnowledge } from "./knowledge.js";
 import { summariseReceptionCall, DEFAULT_SUMMARY_MODEL, openAiErrorMessage } from "./summary.js";
 import { sendReceptionNotification, DEFAULT_NOTIFICATION_TO } from "./notifications.js";
@@ -25,6 +25,10 @@ import { sendReceptionNotification, DEFAULT_NOTIFICATION_TO } from "./notificati
 export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1";
 export const DEFAULT_TRANSCRIBE_MODEL = "gpt-4o-transcribe";
 export const DEFAULT_VOICE = "marin";
+// Hard ceiling per reply, in output tokens (audio plus transcript). Roughly
+// 20 audio tokens a second, so 400 is about 20 seconds of speech: a safety
+// net against monologues, well above a normal two-sentence turn.
+export const DEFAULT_MAX_OUTPUT_TOKENS = 400;
 const CLIENT_SECRET_TTL_SECONDS = 300;
 const MAX_TRANSCRIPT_ENTRIES = 600;
 const MAX_MESSAGE_LENGTH = 4000;
@@ -70,10 +74,16 @@ export function receptionConfig(env) {
     transcribeModel: text(env.OPENAI_TRANSCRIBE_MODEL, 80) || DEFAULT_TRANSCRIBE_MODEL,
     voice: text(env.OPENAI_REALTIME_VOICE, 40) || DEFAULT_VOICE,
     turnDetection: turnDetectionConfig(env).type,
+    maxOutputTokens: maxOutputTokens(env),
     notificationTo: text(env.RECEPTION_NOTIFICATION_TO, 160) || DEFAULT_NOTIFICATION_TO,
     notificationProvider: "simulated",
     greeting: RECEPTIONIST_GREETING
   };
+}
+
+function maxOutputTokens(env) {
+  const requested = Number(env.OPENAI_REALTIME_MAX_OUTPUT_TOKENS);
+  return Number.isFinite(requested) && requested >= 50 && requested <= 4096 ? Math.round(requested) : DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
 function turnDetectionConfig(env) {
@@ -177,14 +187,15 @@ async function createSession(env, id, user) {
       output_modalities: ["audio"],
       audio: {
         input: {
-          transcription: { model: config.transcribeModel, language: "en" },
+          transcription: { model: config.transcribeModel, language: "en", prompt: TRANSCRIPTION_HINT },
           noise_reduction: { type: noiseReduction },
           turn_detection: turnDetectionConfig(env)
         },
         output: { voice: config.voice }
       },
       tools: RECEPTION_TOOLS,
-      tool_choice: "auto"
+      tool_choice: "auto",
+      max_output_tokens: maxOutputTokens(env)
     }
   };
 
@@ -226,6 +237,7 @@ async function createSession(env, id, user) {
     voice: config.voice,
     transcribe_model: config.transcribeModel,
     turn_detection: payload.session.audio.input.turn_detection.type,
+    max_output_tokens: payload.session.max_output_tokens,
     expires_at: data.expires_at || null
   });
 

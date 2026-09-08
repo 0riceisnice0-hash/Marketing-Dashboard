@@ -551,7 +551,7 @@ assert(tuesdayEvening.open === false && tuesdayEvening.reopens === "tomorrow mor
 assert(officeStatus(new Date("2026-09-11T17:30:00Z")).reopens === "on Monday morning at 8.30am", "Friday evening should reopen Monday");
 assert(officeStatus(new Date("2026-09-08T09:00:00Z")).open === true, "Tuesday 10am UK should be open");
 const promptWithNumber = buildReceptionistInstructions({ callerNumber: "07700 900123", source: "browser_test", now: new Date("2026-09-08T18:42:00Z") });
-assert(promptWithNumber.includes("07700 900123") && promptWithNumber.includes("best callback number"), "caller number should be passed into the instructions");
+assert(promptWithNumber.includes("07700 900123") && promptWithNumber.includes("on this number"), "caller number should be passed into the instructions");
 assert(promptWithNumber.includes("Thanks for calling Fenster Glazing. Our office is currently closed"), "instructions should carry the greeting");
 assert(!/Chief Meow Officer|purr|meow/i.test(promptWithNumber), "the receptionist must not inherit Legend's cat persona");
 assert(promptWithNumber.includes("Nick Baker, Sales Director"), "the published team roster is in the instructions");

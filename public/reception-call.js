@@ -368,7 +368,7 @@ export class BrowserTestCall {
     const others = calls.filter((call) => call.name !== "end_call");
     for (const call of others) this.runTool(call);
     if (hangup) {
-      this.requestHangup(hangup);
+      this.requestHangup(hangup, response);
       return;
     }
     if (others.length) return;
@@ -412,10 +412,34 @@ export class BrowserTestCall {
    * playing, then end the call. A failsafe ends it anyway if no
    * output_audio_buffer.stopped ever arrives.
    */
-  requestHangup(call) {
+  requestHangup(call, response = {}) {
     if (this.hangup || this.phase !== "live") return;
     let reason = "other";
     try { reason = JSON.parse(call.arguments || "{}").reason || "other"; } catch { reason = "other"; }
+
+    // Guard: the receptionist may only hang up straight after a goodbye, and
+    // never while a question or a promised read-back is still hanging. A
+    // hang-up that fails the check is refused and the model is told why.
+    const said = responseTranscript(response) || this.latestAssistantText();
+    const askedQuestion = /\?/.test(said);
+    const promisedMore = /\b(read (that|it) back|let me (just )?(confirm|check)|i'll (just )?(confirm|check|read))\b/i.test(said);
+    const saidGoodbye = /\b(bye|goodbye|take care|thanks for calling|cheers|have a (good|nice|lovely) (day|evening|night|one))\b/i.test(said);
+    if (reason !== "abusive_caller" && reason !== "time_limit" && (askedQuestion || promisedMore || !saidGoodbye)) {
+      this.stats.hangup_refused = (this.stats.hangup_refused || 0) + 1;
+      this.notice("Hang-up refused: the receptionist had not said goodbye yet.");
+      this.reportEvent("hangup_refused", { reason, asked_question: askedQuestion, promised_more: promisedMore, said_goodbye: saidGoodbye, said: said.slice(0, 200) });
+      const why = askedQuestion
+        ? "NOT hung up: you just asked the caller something. Wait for their answer. Only call end_call straight after your goodbye, once the caller has acknowledged."
+        : promisedMore
+          ? "NOT hung up: you promised to read back or confirm. Do that now, wait for the caller to say it is right, then say goodbye, then call end_call."
+          : "NOT hung up: you have not said goodbye yet. Wait for the caller to acknowledge, say 'Thanks for calling, bye', then call end_call.";
+      this.send({
+        type: "conversation.item.create",
+        item: { type: "function_call_output", call_id: call.call_id, output: JSON.stringify({ ok: false, hung_up: false, error: why }) }
+      });
+      if (!askedQuestion) this.send({ type: "response.create" });
+      return;
+    }
     this.hangup = { reason, at: Date.now() };
     this.api(`/api/reception/calls/${this.callId}/tool`, { method: "POST", body: { name: "end_call", arguments: { reason } } }).catch(() => {});
     this.notice("The receptionist is ending the call.");
@@ -425,6 +449,13 @@ export class BrowserTestCall {
     } else {
       this.finishHangup(700);
     }
+  }
+
+  latestAssistantText() {
+    for (let index = this.entries.length - 1; index >= 0; index -= 1) {
+      if (this.entries[index].role === "assistant" && this.entries[index].body.trim()) return this.entries[index].body;
+    }
+    return "";
   }
 
   finishHangup(delayMs) {
@@ -704,6 +735,19 @@ export class BrowserTestCall {
       keepalive: true
     }).catch(() => {});
   }
+}
+
+// The spoken words of one response, from the response payload itself.
+function responseTranscript(response) {
+  const parts = [];
+  for (const item of response?.output || []) {
+    if (item.type !== "message") continue;
+    for (const content of item.content || []) {
+      if (typeof content.transcript === "string") parts.push(content.transcript);
+      else if (typeof content.text === "string") parts.push(content.text);
+    }
+  }
+  return parts.join(" ").trim();
 }
 
 export function friendlyStartError(error) {

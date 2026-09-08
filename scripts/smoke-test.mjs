@@ -571,13 +571,15 @@ const emptyReceptionData = await emptyReception.json();
 assert(Array.isArray(emptyReceptionData.calls) && emptyReceptionData.calls.length === 0, "no calls initially");
 assert(emptyReceptionData.config.openAi === false, "config should report OpenAI missing until the secret exists");
 assert(emptyReceptionData.config.notificationProvider === "simulated", "V1 provider is simulated");
+assert(emptyReceptionData.config.voice === "ballad" && emptyReceptionData.config.transcribeModel === "whisper-1", "owner-requested defaults: ballad voice, whisper transcription");
 
 // Malformed input.
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: "not json" })).status === 400, "non-JSON body should be rejected");
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ caller_number: "call me maybe" }) })).status === 400, "a non-numeric caller number should be rejected");
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ source: "twilio" }) })).status === 400, "only browser_test calls can be created from the dashboard");
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ voice: "brian" }) })).status === 400, "unknown voices are refused");
-assert(promptWithNumber.includes("ACCENT: you speak British English"), "the accent is pinned in the instructions");
+assert(promptWithNumber.includes("ACCENT, NON-NEGOTIABLE: you are BRITISH") && promptWithNumber.includes("glottal T"), "the accent is pinned in the instructions");
+assert(promptWithNumber.includes("NEVER call end_call in the same turn as a question"), "hanging up before the goodbye is forbidden");
 
 // Session without an OpenAI key fails clearly and closes the call.
 const noKeyCall = await (await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: "{}" })).json();
@@ -614,7 +616,7 @@ assert(secretRequest.body.session.instructions.includes("07700 900123"), "the ca
 assert(secretRequest.body.session.tools.some((tool) => tool.name === "search_fenster_knowledge"), "the knowledge tool is exposed to the voice model");
 assert(secretRequest.body.session.tools.some((tool) => tool.name === "end_call"), "the hang-up tool is exposed to the voice model");
 assert(sessionJson.max_call_seconds === 180 && sessionJson.wrap_up_seconds === 20, "the transport is told the call time limit");
-assert(secretRequest.body.session.audio.input.transcription.model === "gpt-4o-transcribe", "input transcription is enabled");
+assert(secretRequest.body.session.audio.input.transcription.model === "whisper-1", "input transcription defaults to whisper-1");
 assert(secretRequest.body.session.audio.output.voice === "ballad", "the chosen voice is sent to OpenAI");
 assert(secretRequest.body.session.audio.input.turn_detection.interrupt_response === true, "barge-in must be enabled");
 assert(secretRequest.body.expires_after.seconds === 300, "client secrets should be short-lived");

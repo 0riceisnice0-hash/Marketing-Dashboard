@@ -2968,6 +2968,7 @@ let receptionPendingOpenId = "";
 let receptionLiveCall = null;
 let receptionLive = freshReceptionLive();
 let receptionTimer = null;
+let receptionSetup = { callerNumber: "", voice: "" };
 
 function freshReceptionLive() {
   return { state: null, transcript: [], notices: [], level: 0, result: null, error: "" };
@@ -3341,7 +3342,8 @@ function rcConsole() {
           <div class="rc-notices" id="rc-notices">${rcNotices()}</div>
         </div>
       </div>
-      ${!active && !finished ? `
+      ${finished ? rcResult() : ""}
+      ${!active ? `
         <div class="rc-setup">
           <div class="rc-setup__fields">
             <label>
@@ -3351,15 +3353,14 @@ function rcConsole() {
             <label>
               <span>Voice</span>
               <select id="rc-voice" data-dashboard-draft="reception-voice">
-                ${(config.voices || [config.voice || "marin"]).map((voice) => `<option value="${escapeHtml(voice)}" ${voice === (config.voice || "marin") ? "selected" : ""}>${escapeHtml(voice)}${voice === (config.voice || "marin") ? " (default)" : ""}</option>`).join("")}
+                ${(config.voices || [config.voice || "ballad"]).map((voice) => `<option value="${escapeHtml(voice)}" ${voice === (receptionSetup.voice || config.voice || "ballad") ? "selected" : ""}>${escapeHtml(voice)}${voice === (config.voice || "ballad") ? " (default)" : ""}</option>`).join("")}
               </select>
             </label>
           </div>
           <p>A real phone line supplies the caller's number automatically. Enter one here to rehearse that: the receptionist will offer a callback "on this number" instead of asking for it. Leave it blank and the receptionist asks for a number when one is needed.</p>
-          <p>The accent is set by the receptionist's instructions, not the voice, so every voice is asked to speak British English; try a few to find the one that sounds least American. The receptionist hangs up itself after its goodbye. Calls are limited to ${escapeHtml(String(Math.round((config.maxCallSeconds || 180) / 60)))} minutes; it is asked to wrap up shortly before, then cut off. Use headphones if you can: the laptop speakers can leak the receptionist's voice back into the microphone and confuse the transcript.</p>
+          <p>Every voice is instructed to speak British English; ballad is the one most often described as British-sounding, so it is the default. Change it here before each call. The receptionist hangs up itself after its goodbye. Calls are limited to ${escapeHtml(String(Math.round((config.maxCallSeconds || 180) / 60)))} minutes; it is asked to wrap up shortly before, then cut off. Use headphones if you can: the laptop speakers can leak the receptionist's voice back into the microphone and confuse the transcript.</p>
           <p class="rc-setup__greeting"><strong>Greeting:</strong> “${escapeHtml(config.greeting || "Thanks for calling Fenster Glazing. Our office is currently closed…")}”</p>
         </div>` : ""}
-      ${finished ? rcResult() : ""}
     </section>
   `;
 }
@@ -3404,6 +3405,8 @@ function rcChips() {
     <span class="rc-chip ${micClass}">${RC_ICONS.mic}<b>Microphone</b>${escapeHtml(micLabel)}</span>
     <span class="rc-chip ${connClass}"><b>Connection</b>${escapeHtml(connLabel)}</span>
     <span class="rc-chip ${aiClass}"><b>Receptionist</b>${escapeHtml(aiLabel)}</span>
+    ${receptionLiveCall?.voice ? `<span class="rc-chip"><b>Voice</b>${escapeHtml(receptionLiveCall.voice)}</span>` : ""}
+    ${receptionLiveCall?.callerNumber ? `<span class="rc-chip"><b>Caller ID</b>${escapeHtml(receptionLiveCall.callerNumber)}</span>` : ""}
   `;
 }
 
@@ -3568,8 +3571,9 @@ async function receptionStart() {
     setReceptionStatus("OpenAI is not configured for this dashboard, so a test call cannot start.");
     return;
   }
-  const callerNumber = $("#rc-caller-number")?.value.trim() || "";
-  const voice = $("#rc-voice")?.value || "";
+  const callerNumber = ($("#rc-caller-number")?.value ?? receptionSetup.callerNumber).trim();
+  const voice = $("#rc-voice")?.value || receptionSetup.voice || "";
+  receptionSetup = { callerNumber, voice };
   receptionLive = freshReceptionLive();
   receptionDetail = null;
   const call = new BrowserTestCall({

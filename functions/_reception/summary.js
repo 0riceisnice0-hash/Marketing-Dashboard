@@ -44,7 +44,7 @@ function summaryInstructions() {
 Rules:
 - British English. Factual and concise. No speculation and no invented details.
 - Use null for anything the caller did not supply. Do not infer a name, number, email or postcode that was not said.
-- Phone numbers: write UK numbers as digits, mobile numbers as five then six digits (07700 900123) and landlines as area code then number (01908 429200). Convert spoken numbers ("double oh", "oh seven seven") into digits. If the receptionist confirmed the caller-ID number as the best callback number, use that number.
+- Phone numbers: write UK numbers as digits, mobile numbers as five then six digits (07700 900123) and landlines as area code then number (01908 429200). Convert spoken numbers ("double oh", "oh seven seven") into digits. If a caller-ID number was supplied with the call and the receptionist offered a callback "on this number" (or the caller never gave a different number), callback_number is that caller-ID number.
 - requested_person: if the caller asked for someone on the Fenster roster, use the roster spelling. Roster: ${roster}. If they asked for someone not on the roster, use the name as spoken. Null if nobody in particular.
 - message: the substance of what the caller wants passed on, written cleanly in the third person (e.g. "John spoke to Nick earlier about a bifold quotation and has a question about the opening size."). Null if no message was left.
 - action_required: exactly one sentence, naming the person if known (e.g. "Nick to call John back tomorrow about the bifold opening size."). "No action required." if nothing is needed.

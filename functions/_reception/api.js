@@ -23,8 +23,10 @@ import { summariseReceptionCall, DEFAULT_SUMMARY_MODEL, openAiErrorMessage } fro
 import { sendReceptionNotification, DEFAULT_NOTIFICATION_TO } from "./notifications.js";
 
 export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1";
-export const DEFAULT_TRANSCRIBE_MODEL = "gpt-4o-transcribe";
-export const DEFAULT_VOICE = "marin";
+// whisper-1 transcribed the owner's test calls better than gpt-4o-transcribe.
+export const DEFAULT_TRANSCRIBE_MODEL = "whisper-1";
+// ballad is the Realtime voice most often described as British-sounding.
+export const DEFAULT_VOICE = "ballad";
 // Every voice the Realtime API offers today. Accent is steered by the
 // instructions, not the voice; this list exists so the operator can A/B them.
 export const REALTIME_VOICES = ["marin", "cedar", "ballad", "sage", "verse", "coral", "alloy", "ash", "echo", "shimmer"];
@@ -413,7 +415,9 @@ async function processCall(env, id) {
     const { summary, model } = await summariseReceptionCall(env, call, messages);
     await updateCall(env, id, {
       caller_name: summary.caller_name || "",
-      callback_number: summary.callback_number || "",
+      // A phone call always knows the number it came from. If the caller did
+      // not dictate a different one, that is the callback number.
+      callback_number: summary.callback_number || call.caller_number || "",
       caller_email: summary.email || "",
       postcode: summary.postcode || "",
       requested_person: summary.requested_person || "",

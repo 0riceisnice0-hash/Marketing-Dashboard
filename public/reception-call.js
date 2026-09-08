@@ -28,6 +28,7 @@ const IGNORED_ERROR_PATTERNS = [
 export class BrowserTestCall {
   constructor(options = {}) {
     this.callerNumber = String(options.callerNumber || "").trim();
+    this.voice = String(options.voice || "").trim().toLowerCase();
     this.api = options.api;
     this.handlers = {
       state: options.onState || (() => {}),
@@ -151,7 +152,7 @@ export class BrowserTestCall {
     this.setPhase("creating", "idle", "Creating the call record...");
     const data = await this.api("/api/reception/calls", {
       method: "POST",
-      body: { source: "browser_test", caller_number: this.callerNumber, client: navigator.userAgent.slice(0, 160) }
+      body: { source: "browser_test", caller_number: this.callerNumber, voice: this.voice, client: navigator.userAgent.slice(0, 160) }
     });
     this.callId = data?.call?.id;
     if (!this.callId) throw new Error("The dashboard did not return a call id.");

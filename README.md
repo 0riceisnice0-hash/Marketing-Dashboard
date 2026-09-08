@@ -161,7 +161,7 @@ Meta bot). Optional receptionist settings, all plain environment variables:
 - `OPENAI_REALTIME_MODEL` (default `gpt-realtime-2.1`)
 - `OPENAI_SUMMARY_MODEL` (default `gpt-5.6-luna`; falls back to `gpt-5.4-mini` if the configured model is unknown)
 - `OPENAI_TRANSCRIBE_MODEL` (default `gpt-4o-transcribe`)
-- `OPENAI_REALTIME_VOICE` (default `marin`)
+- `OPENAI_REALTIME_VOICE` (default `marin`; any of marin, cedar, ballad, sage, verse, coral, alloy, ash, echo, shimmer. The Test Call panel can pick a voice per call. Accent comes from the instructions, which pin British English)
 - `OPENAI_REALTIME_VAD` (`semantic_vad`, the default, or `server_vad`)
 - `OPENAI_REALTIME_NOISE_REDUCTION` (`far_field`, the default for a laptop microphone, or `near_field`)
 - `OPENAI_REALTIME_MAX_OUTPUT_TOKENS` (default `400`, roughly 20 seconds of speech; the hard cap on one reply)

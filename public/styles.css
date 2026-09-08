@@ -3836,7 +3836,8 @@ dialog::backdrop {
 .rc-notice { padding: 6px 10px; border-radius: 8px; background: #fff3d6; color: #7a4a00; font-size: .76rem; }
 
 .rc-setup { display: grid; gap: 8px; max-width: 640px; padding: 14px 16px; border: 1px dashed #c9d8dc; border-radius: 12px; }
-.rc-setup label { max-width: 300px; }
+.rc-setup__fields { display: flex; flex-wrap: wrap; gap: 12px; }
+.rc-setup label { flex: 1 1 220px; max-width: 300px; }
 .rc-setup p { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .rc-setup__greeting { color: #133f58 !important; }
 .rc-optional { margin-left: 6px; color: #9aabb3; font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }

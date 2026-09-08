@@ -3219,7 +3219,7 @@ function rcDetail() {
     ["Duration", rcDuration(call.duration_seconds)],
     ["Source", ({ browser_test: "browser_test (dashboard microphone test)" })[call.source] || call.source],
     ["Caller number supplied", call.caller_number ? `${call.caller_number}${call.metadata?.simulated_caller_number ? " (simulated)" : ""}` : "None"],
-    ["Voice model", call.realtime_model],
+    ["Voice model", `${call.realtime_model || ""}${call.metadata?.voice ? ` · voice ${call.metadata.voice}` : ""}`],
     ["Summary", ({ completed: `Completed (${call.summary_model || "model"})`, failed: "Failed", skipped: "Skipped (nothing to summarise)", pending: "Pending" })[call.summary_status] || call.summary_status],
     ["Email notification", ({ simulated: `Simulated to ${notification?.recipient || ""} (not sent)`, sent: "Sent", failed: "Failed", skipped: "Not generated", pending: "Pending" })[call.notification_status] || call.notification_status],
     ["Started by", call.started_by]
@@ -3343,12 +3343,20 @@ function rcConsole() {
       </div>
       ${!active && !finished ? `
         <div class="rc-setup">
-          <label>
-            <span>Simulated caller number <span class="rc-optional">optional</span></span>
-            <input id="rc-caller-number" type="tel" inputmode="tel" placeholder="07700 900123" maxlength="32" autocomplete="off" data-dashboard-draft="reception-caller-number">
-          </label>
+          <div class="rc-setup__fields">
+            <label>
+              <span>Simulated caller number <span class="rc-optional">optional</span></span>
+              <input id="rc-caller-number" type="tel" inputmode="tel" placeholder="07700 900123" maxlength="32" autocomplete="off" data-dashboard-draft="reception-caller-number">
+            </label>
+            <label>
+              <span>Voice</span>
+              <select id="rc-voice" data-dashboard-draft="reception-voice">
+                ${(config.voices || [config.voice || "marin"]).map((voice) => `<option value="${escapeHtml(voice)}" ${voice === (config.voice || "marin") ? "selected" : ""}>${escapeHtml(voice)}${voice === (config.voice || "marin") ? " (default)" : ""}</option>`).join("")}
+              </select>
+            </label>
+          </div>
           <p>A real phone line supplies the caller's number automatically. Enter one here to rehearse that: the receptionist will offer a callback "on this number" instead of asking for it. Leave it blank and the receptionist asks for a number when one is needed.</p>
-          <p>The receptionist hangs up itself after its goodbye. Calls are limited to ${escapeHtml(String(Math.round((config.maxCallSeconds || 180) / 60)))} minutes; it is asked to wrap up shortly before, then cut off. Use headphones if you can: the laptop speakers can leak the receptionist's voice back into the microphone and confuse the transcript.</p>
+          <p>The accent is set by the receptionist's instructions, not the voice, so every voice is asked to speak British English; try a few to find the one that sounds least American. The receptionist hangs up itself after its goodbye. Calls are limited to ${escapeHtml(String(Math.round((config.maxCallSeconds || 180) / 60)))} minutes; it is asked to wrap up shortly before, then cut off. Use headphones if you can: the laptop speakers can leak the receptionist's voice back into the microphone and confuse the transcript.</p>
           <p class="rc-setup__greeting"><strong>Greeting:</strong> “${escapeHtml(config.greeting || "Thanks for calling Fenster Glazing. Our office is currently closed…")}”</p>
         </div>` : ""}
       ${finished ? rcResult() : ""}
@@ -3561,10 +3569,12 @@ async function receptionStart() {
     return;
   }
   const callerNumber = $("#rc-caller-number")?.value.trim() || "";
+  const voice = $("#rc-voice")?.value || "";
   receptionLive = freshReceptionLive();
   receptionDetail = null;
   const call = new BrowserTestCall({
     callerNumber,
+    voice,
     api,
     onState: (state) => {
       receptionLive.state = state;

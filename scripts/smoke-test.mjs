@@ -576,6 +576,8 @@ assert(emptyReceptionData.config.notificationProvider === "simulated", "V1 provi
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: "not json" })).status === 400, "non-JSON body should be rejected");
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ caller_number: "call me maybe" }) })).status === 400, "a non-numeric caller number should be rejected");
 assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ source: "twilio" }) })).status === 400, "only browser_test calls can be created from the dashboard");
+assert((await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ voice: "brian" }) })).status === 400, "unknown voices are refused");
+assert(promptWithNumber.includes("ACCENT: you speak British English"), "the accent is pinned in the instructions");
 
 // Session without an OpenAI key fails clearly and closes the call.
 const noKeyCall = await (await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: "{}" })).json();
@@ -587,7 +589,7 @@ assert(tables.reception_calls.find((row) => row.id === noKeyCall.call.id).status
 env.OPENAI_API_KEY = "test-openai-key";
 
 // Create a browser test call with a simulated caller number.
-const created = await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ source: "browser_test", caller_number: " 07700  900123 " }) });
+const created = await call("/api/reception/calls", { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ source: "browser_test", caller_number: " 07700  900123 ", voice: "ballad" }) });
 assert(created.status === 201, "creating a browser test call should work");
 const createdCall = (await created.json()).call;
 assert(createdCall.status === "in_progress" && createdCall.source === "browser_test", "new call should be an in-progress browser test");
@@ -603,6 +605,7 @@ const sessionJson = await session.json();
 assert(sessionJson.client_secret === "ek_test_secret_123", "the ephemeral client secret is returned");
 assert(!JSON.stringify(sessionJson).includes("test-openai-key"), "the OpenAI API key must never reach the browser");
 assert(sessionJson.model === "gpt-realtime-2.1", "default realtime model should be the current one");
+assert(sessionJson.voice === "ballad" && emptyReceptionData.config.voices.includes("ballad"), "a per-call voice choice reaches the session");
 const secretRequest = openAiRequests.find((item) => item.url.includes("client_secrets"));
 assert(secretRequest, "a client secret should have been requested from OpenAI");
 assert((secretRequest.init.headers.authorization || secretRequest.init.headers.Authorization) === "Bearer test-openai-key", "the server uses the real key against OpenAI");
@@ -612,6 +615,7 @@ assert(secretRequest.body.session.tools.some((tool) => tool.name === "search_fen
 assert(secretRequest.body.session.tools.some((tool) => tool.name === "end_call"), "the hang-up tool is exposed to the voice model");
 assert(sessionJson.max_call_seconds === 180 && sessionJson.wrap_up_seconds === 20, "the transport is told the call time limit");
 assert(secretRequest.body.session.audio.input.transcription.model === "gpt-4o-transcribe", "input transcription is enabled");
+assert(secretRequest.body.session.audio.output.voice === "ballad", "the chosen voice is sent to OpenAI");
 assert(secretRequest.body.session.audio.input.turn_detection.interrupt_response === true, "barge-in must be enabled");
 assert(secretRequest.body.expires_after.seconds === 300, "client secrets should be short-lived");
 assert(secretRequest.body.session.max_output_tokens === 400, "replies are capped so the receptionist cannot monologue");

@@ -25,6 +25,9 @@ import { sendReceptionNotification, DEFAULT_NOTIFICATION_TO } from "./notificati
 export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1";
 export const DEFAULT_TRANSCRIBE_MODEL = "gpt-4o-transcribe";
 export const DEFAULT_VOICE = "marin";
+// Every voice the Realtime API offers today. Accent is steered by the
+// instructions, not the voice; this list exists so the operator can A/B them.
+export const REALTIME_VOICES = ["marin", "cedar", "ballad", "sage", "verse", "coral", "alloy", "ash", "echo", "shimmer"];
 // Hard ceiling per reply, in output tokens (audio plus transcript). Roughly
 // 20 audio tokens a second, so 400 is about 20 seconds of speech: a safety
 // net against monologues, well above a normal two-sentence turn.
@@ -76,7 +79,8 @@ export function receptionConfig(env) {
     realtimeModel: text(env.OPENAI_REALTIME_MODEL, 80) || DEFAULT_REALTIME_MODEL,
     summaryModel: text(env.OPENAI_SUMMARY_MODEL, 80) || DEFAULT_SUMMARY_MODEL,
     transcribeModel: text(env.OPENAI_TRANSCRIBE_MODEL, 80) || DEFAULT_TRANSCRIBE_MODEL,
-    voice: text(env.OPENAI_REALTIME_VOICE, 40) || DEFAULT_VOICE,
+    voice: REALTIME_VOICES.includes(text(env.OPENAI_REALTIME_VOICE, 40)) ? text(env.OPENAI_REALTIME_VOICE, 40) : DEFAULT_VOICE,
+    voices: REALTIME_VOICES,
     turnDetection: turnDetectionConfig(env).type,
     maxOutputTokens: maxOutputTokens(env),
     maxCallSeconds: maxCallSeconds(env),
@@ -159,12 +163,18 @@ async function createCall(env, request, user) {
     return json({ error: "The simulated caller number should look like a phone number (digits, spaces, + and brackets only)" }, 400);
   }
 
+  const requestedVoice = text(body.voice, 40).toLowerCase();
+  if (requestedVoice && !REALTIME_VOICES.includes(requestedVoice)) {
+    return json({ error: `Unknown voice. Choose one of: ${REALTIME_VOICES.join(", ")}` }, 400);
+  }
+
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const metadata = {
     simulated_caller_number: Boolean(callerNumber),
     started_from: "dashboard",
-    client: text(body.client, 160)
+    client: text(body.client, 160),
+    voice: requestedVoice || ""
   };
 
   await env.DB.prepare(
@@ -186,6 +196,8 @@ async function createSession(env, id, user) {
   }
 
   const config = receptionConfig(env);
+  const callMetadata = parseJson(call.metadata_json);
+  const voice = REALTIME_VOICES.includes(callMetadata.voice) ? callMetadata.voice : config.voice;
   const instructions = buildReceptionistInstructions({
     callerNumber: call.caller_number,
     source: call.source,
@@ -206,7 +218,7 @@ async function createSession(env, id, user) {
           noise_reduction: { type: noiseReduction },
           turn_detection: turnDetectionConfig(env)
         },
-        output: { voice: config.voice }
+        output: { voice }
       },
       tools: RECEPTION_TOOLS,
       tool_choice: "auto",
@@ -249,7 +261,7 @@ async function createSession(env, id, user) {
   await logEvent(env, id, "session.created", {
     by: user?.name || "",
     model: config.realtimeModel,
-    voice: config.voice,
+    voice,
     transcribe_model: config.transcribeModel,
     turn_detection: payload.session.audio.input.turn_detection.type,
     max_output_tokens: payload.session.max_output_tokens,
@@ -263,7 +275,7 @@ async function createSession(env, id, user) {
     client_secret: data.value,
     expires_at: data.expires_at || null,
     model: config.realtimeModel,
-    voice: config.voice,
+    voice,
     greeting: RECEPTIONIST_GREETING,
     max_call_seconds: maxCallSeconds(env),
     wrap_up_seconds: WRAP_UP_SECONDS

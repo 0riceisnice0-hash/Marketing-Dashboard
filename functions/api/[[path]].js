@@ -1501,7 +1501,7 @@ async function fensterWebsiteState(env, request) {
    * gives the one thing that was invisible before any of this existed: where
    * people give up inside a third-party iframe.
    */
-  const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps, toolChoices, toolDepth, toolTrailRows] = await Promise.all([
+  const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps, toolChoices, toolDepth, toolTrailRows, toolUntouched, toolDaily] = await Promise.all([
     env.DB.prepare(`
       SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
       WHERE occurred_at >= ? AND event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
@@ -1554,6 +1554,31 @@ async function fensterWebsiteState(env, request) {
       WHERE occurred_at >= ? AND environment IN ('production','legacy')
         AND event_type IN ('quote_tool_engaged','quote_step','quote_tool_left','quote_completed')
       ORDER BY occurred_at DESC LIMIT 400
+    `).bind(since).all(),
+    /*
+     * LOADED AND NEVER TOUCHED. The frame autoloads on scroll, so a crawler or
+     * anyone who scrolled past produces `quote_iframe_loaded` and nothing else.
+     * Reported so it can be shown as EXCLUDED rather than quietly folded into a
+     * total -- the number is interesting, it just is not a person using the tool.
+     */
+    env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM (
+        SELECT journey_id FROM website_events
+        WHERE occurred_at >= ? AND environment IN ('production','legacy')
+        GROUP BY journey_id
+        HAVING SUM(event_type = 'quote_iframe_loaded') > 0
+           AND SUM(event_type = 'quote_tool_engaged') = 0
+      )
+    `).bind(since).first(),
+    /* Daily shape, counted by journey. */
+    env.DB.prepare(`
+      SELECT substr(occurred_at, 1, 10) AS day,
+        COUNT(DISTINCT CASE WHEN event_type = 'quote_tool_engaged' THEN journey_id END) AS engaged,
+        COUNT(DISTINCT CASE WHEN event_type = 'quote_completed' THEN journey_id END) AS completed
+      FROM website_events
+      WHERE occurred_at >= ? AND environment IN ('production','legacy')
+        AND event_type IN ('quote_tool_engaged','quote_completed')
+      GROUP BY day ORDER BY day
     `).bind(since).all()
   ]);
 
@@ -1664,6 +1689,8 @@ async function fensterWebsiteState(env, request) {
     toolChoices: toolChoices.results || [],
     toolDepth: toolDepth.results || [],
     toolTrailRows: toolTrailRows.results || [],
+    toolUntouched: Number(toolUntouched?.count || 0),
+    toolDaily: toolDaily.results || [],
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     legendChats: Number(chatCount?.count || 0),
     chats: chats.results || [],

@@ -1460,6 +1460,14 @@ async function fensterWebsiteState(env, request) {
       LEFT JOIN website_journeys j ON j.visitor_id = v.visitor_id AND j.environment IN ('production','legacy')
       LEFT JOIN website_events e ON e.journey_id = j.journey_id AND e.environment IN ('production','legacy')
       WHERE v.last_seen_at >= ? AND v.environment IN ('production','legacy')
+        AND v.visitor_id IN (
+          SELECT visitor_id FROM website_journeys
+          WHERE environment IN ('production','legacy') AND journey_id IN (
+            SELECT journey_id FROM website_events
+            WHERE environment IN ('production','legacy')
+              AND event_type NOT IN ('page_view','visitor_seen')
+          )
+        )
       GROUP BY v.visitor_id
       ORDER BY v.last_seen_at DESC LIMIT 2000
     `).bind(new Date().toISOString(), since).all()

@@ -1912,8 +1912,13 @@ function renderWindowcadTool() {
   }
 
   const rate = engaged ? Math.round((finished / engaged) * 100) : 0;
+  const since = String(s.toolSince || "").slice(0, 10);
+  const sinceLabel = since
+    ? new Date(since + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "long" })
+    : "";
 
   mount.innerHTML = `
+    ${sinceLabel ? `<p class="wc-scope">Everything here covers <strong>${escapeHtml(sinceLabel)} onwards</strong> &mdash; when the designer started reporting its own steps. The period buttons above do not stretch it further back, because there is nothing further back to show.</p>` : ""}
     <div class="wt-kpis">
       <article class="wt-kpi wt-kpi--lead"><strong>${wtFmt(engaged)}</strong><span>Used the designer</span><small>interacted, not just loaded</small></article>
       <article class="wt-kpi"><strong>${wtFmt(finished)}</strong><span>Got a quote</span><small>${rate}% of those who started</small></article>

@@ -1501,11 +1501,26 @@ async function fensterWebsiteState(env, request) {
    * gives the one thing that was invisible before any of this existed: where
    * people give up inside a third-party iframe.
    */
+  /*
+   * THE IN-TOOL FIGURES ARE SCOPED TO WHEN THE BRIDGE STARTED REPORTING, not to
+   * the page's period selector. Over 30 days the tool has one day of coverage,
+   * so "587 loaded, never touched" was being set beside "2 used the designer" --
+   * two populations from different eras, read as a conversion rate. Anything
+   * that cannot be measured for the whole window is not shown for the whole
+   * window.
+   */
+  const bridgeFirst = await env.DB.prepare(`
+    SELECT MIN(occurred_at) AS first FROM website_events
+    WHERE event_type IN ('quote_tool_engaged','quote_step','quote_tool_left')
+      AND environment IN ('production','legacy')
+  `).first();
+  const toolSince = bridgeFirst?.first && bridgeFirst.first > since ? bridgeFirst.first : since;
+
   const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps, toolChoices, toolDepth, toolTrailRows, toolUntouched, toolDaily] = await Promise.all([
     env.DB.prepare(`
       SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
       WHERE occurred_at >= ? AND event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
-    `).bind(since).first(),
+    `).bind(toolSince).first(),
     env.DB.prepare(`
       SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
       WHERE occurred_at >= ? AND event_type = 'quote_completed' AND environment IN ('production','legacy')
@@ -1513,12 +1528,12 @@ async function fensterWebsiteState(env, request) {
           SELECT journey_id FROM website_events
           WHERE occurred_at >= ? AND event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
         )
-    `).bind(since, since).first(),
+    `).bind(toolSince, toolSince).first(),
     env.DB.prepare(`
       SELECT cta AS step, COUNT(DISTINCT journey_id) AS count FROM website_events
       WHERE occurred_at >= ? AND event_type = 'quote_tool_left' AND environment IN ('production','legacy')
       GROUP BY cta ORDER BY count DESC LIMIT 8
-    `).bind(since).all(),
+    `).bind(toolSince).all(),
     /*
      * WHAT PEOPLE ACTUALLY CHOOSE. Each `quote_step` carries the choice made on
      * the screen it left -- the product, the frame style, the colour. Counted by
@@ -1531,7 +1546,7 @@ async function fensterWebsiteState(env, request) {
       WHERE occurred_at >= ? AND event_type = 'quote_step' AND environment IN ('production','legacy')
         AND cta <> '' AND cta NOT LIKE 'step %'
       GROUP BY cta ORDER BY count DESC LIMIT 12
-    `).bind(since).all(),
+    `).bind(toolSince).all(),
     /*
      * HOW DEEP THEY GET. `event_value` is not populated for these, so depth is
      * the count of `quote_step` rows on the journey -- one per screen advanced.
@@ -1543,7 +1558,7 @@ async function fensterWebsiteState(env, request) {
         WHERE occurred_at >= ? AND event_type = 'quote_step' AND environment IN ('production','legacy')
         GROUP BY journey_id
       ) GROUP BY depth ORDER BY depth
-    `).bind(since).all(),
+    `).bind(toolSince).all(),
     /*
      * THE TRAILS THEMSELVES. One row per event, ordered, so the tab can show
      * what an individual person did screen by screen. Capped hard: this is a
@@ -1553,8 +1568,13 @@ async function fensterWebsiteState(env, request) {
       SELECT journey_id, event_type, cta, occurred_at FROM website_events
       WHERE occurred_at >= ? AND environment IN ('production','legacy')
         AND event_type IN ('quote_tool_engaged','quote_step','quote_tool_left','quote_completed')
+        AND journey_id IN (
+          SELECT journey_id FROM website_events
+          WHERE event_type IN ('quote_tool_engaged','quote_step')
+            AND environment IN ('production','legacy')
+        )
       ORDER BY occurred_at DESC LIMIT 400
-    `).bind(since).all(),
+    `).bind(toolSince).all(),
     /*
      * LOADED AND NEVER TOUCHED. The frame autoloads on scroll, so a crawler or
      * anyone who scrolled past produces `quote_iframe_loaded` and nothing else.
@@ -1569,7 +1589,7 @@ async function fensterWebsiteState(env, request) {
         HAVING SUM(event_type = 'quote_iframe_loaded') > 0
            AND SUM(event_type = 'quote_tool_engaged') = 0
       )
-    `).bind(since).first(),
+    `).bind(toolSince).first(),
     /* Daily shape, counted by journey. */
     env.DB.prepare(`
       SELECT substr(occurred_at, 1, 10) AS day,
@@ -1579,7 +1599,7 @@ async function fensterWebsiteState(env, request) {
       WHERE occurred_at >= ? AND environment IN ('production','legacy')
         AND event_type IN ('quote_tool_engaged','quote_completed')
       GROUP BY day ORDER BY day
-    `).bind(since).all()
+    `).bind(toolSince).all()
   ]);
 
   /*
@@ -1690,6 +1710,7 @@ async function fensterWebsiteState(env, request) {
     toolDepth: toolDepth.results || [],
     toolTrailRows: toolTrailRows.results || [],
     toolUntouched: Number(toolUntouched?.count || 0),
+    toolSince: toolSince,
     toolDaily: toolDaily.results || [],
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     legendChats: Number(chatCount?.count || 0),

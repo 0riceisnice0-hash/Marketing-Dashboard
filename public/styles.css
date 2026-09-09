@@ -3877,6 +3877,8 @@ dialog::backdrop {
   .rc-log__list > div { grid-template-columns: 1fr; gap: 2px; }
   .rc-email__frame { height: 520px; }
   .rc-turn { max-width: 100%; }
+}
+
 /* Inside the quote tool. Reuses `.wt-consent__figures` for the four counts and
    `.wt-funnel__steps` for the leave-step bars, so this panel only needs the two
    things those do not already provide: a sub-heading and an honest empty
@@ -4033,3 +4035,14 @@ dialog::backdrop {
 }
 
 .wc-trail--won footer { color: var(--green); }
+
+.wc-scope {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--blue);
+  background: var(--soft);
+  border-radius: 0 8px 8px 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}

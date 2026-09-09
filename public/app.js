@@ -1925,6 +1925,13 @@ function renderWindowcadTool() {
 
     ${wcDailyChart(daily)}
 
+    <div class="wt-grid wt-grid--two">
+      ${wcBarPanelFull("Where quotes are started", "The page the tool was opened from. This is the number that showed the homepage had stopped feeding /online-quote/.",
+        (Array.isArray(s.quotePages) ? s.quotePages : []).map((r) => ({ label: r.page, count: Number(r.opened || 0) })), "var(--blue)")}
+      ${wcBarPanelFull("What brings the people who finish one", "Source of the journeys that completed a quote.",
+        (Array.isArray(s.quoteSources) ? s.quoteSources : []).map((r) => ({ label: r.src, count: Number(r.quotes || 0) })), "var(--green)")}
+    </div>
+
     <section class="wt-panel wc-inside">
       <header class="wt-panel__head">
         <div><h4>Inside the designer</h4><p>What people pick and where they stop, reported by the tool itself.</p></div>
@@ -2015,12 +2022,20 @@ function wcDailyChart(daily) {
     </section>`;
 }
 
+function wcBarPanelFull(title, hint, items, hue) {
+  return `
+    <section class="wt-panel">
+      <header class="wt-panel__head"><div><h4>${escapeHtml(title)}</h4><p>${escapeHtml(hint)}</p></div></header>
+      ${items.length ? wcBars("", items, hue) : `<p class="wc-empty-note">Nothing recorded in this period.</p>`}
+    </section>`;
+}
+
 function wcBars(title, items, hue) {
   if (!items.length) return `<div class="wc-block"><h5>${escapeHtml(title)}</h5><p class="wc-muted">Nothing yet.</p></div>`;
   const max = Math.max(1, ...items.map((i) => i.count));
   return `
     <div class="wc-block">
-      <h5>${escapeHtml(title)}</h5>
+      ${title ? `<h5>${escapeHtml(title)}</h5>` : ""}
       <div class="wc-bars">
         ${items.slice(0, 10).map((i) => `
           <div class="wc-bar" title="${escapeHtml(String(i.label || "unnamed"))}: ${wtFmt(i.count)}">

@@ -1515,7 +1515,7 @@ async function fensterWebsiteState(env, request) {
    * bridge below only covers the days since it started reporting, so the two
    * are kept apart rather than averaged into one misleading rate.
    */
-  const [quoteDaily, quoteTotals] = await Promise.all([
+  const [quoteDaily, quoteTotals, quotePages, quoteSources] = await Promise.all([
     env.DB.prepare(`
       SELECT substr(occurred_at, 1, 10) AS day,
         SUM(event_type = 'quote_iframe_loaded') AS seen,
@@ -1535,7 +1535,32 @@ async function fensterWebsiteState(env, request) {
       FROM website_events
       WHERE occurred_at >= ? AND environment IN ('production','legacy')
         AND event_type IN ('quote_iframe_loaded','quote_opened','quote_completed')
-    `).bind(since).first()
+    `).bind(since).first(),
+    /*
+     * WHICH PAGE THE QUOTE IS STARTED FROM. `quote_completed` arrives from a
+     * server relay with no page, so the page is taken from the OPEN. This is the
+     * number that showed the homepage had stopped feeding /online-quote/.
+     */
+    env.DB.prepare(`
+      SELECT page_path AS page, COUNT(*) AS opened,
+        COUNT(DISTINCT journey_id) AS people
+      FROM website_events
+      WHERE occurred_at >= ? AND environment IN ('production','legacy')
+        AND event_type = 'quote_opened' AND page_path <> ''
+      GROUP BY page ORDER BY opened DESC LIMIT 10
+    `).bind(since).all(),
+    /* What brings the people who finish one. */
+    env.DB.prepare(`
+      SELECT
+        CASE WHEN COALESCE(NULLIF(w.source,''),'') = '' THEN 'Direct / unattributed'
+             ELSE w.source || CASE WHEN w.medium <> '' THEN ' / ' || w.medium ELSE '' END END AS src,
+        COUNT(DISTINCT e.journey_id) AS quotes
+      FROM website_events e
+      JOIN website_journeys w ON w.journey_id = e.journey_id
+      WHERE e.occurred_at >= ? AND e.environment IN ('production','legacy')
+        AND e.event_type = 'quote_completed'
+      GROUP BY src ORDER BY quotes DESC LIMIT 8
+    `).bind(since).all()
   ]);
 
   const bridgeFirst = await env.DB.prepare(`
@@ -1742,6 +1767,8 @@ async function fensterWebsiteState(env, request) {
     toolSince: toolSince,
     quoteDaily: quoteDaily.results || [],
     quoteTotals: quoteTotals || {},
+    quotePages: quotePages.results || [],
+    quoteSources: quoteSources.results || [],
     toolDaily: toolDaily.results || [],
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     legendChats: Number(chatCount?.count || 0),

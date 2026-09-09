@@ -728,6 +728,9 @@ const WEBSITE_EVENT_TYPES = new Set([
   "chat_acknowledged",
   "chat_message_sent",
   "chat_reply_received",
+  "quote_tool_engaged",
+  "quote_step",
+  "quote_tool_left",
   "quote_completed"
 ]);
 
@@ -759,7 +762,14 @@ const WEBSITE_STAT_TYPES = new Set([
   "form_validation_error",
   // Server-relayed total for WindowCAD completions that arrive without a
   // consented FG2 reference. Aggregate count only; no journey is created.
-  "quote_completed"
+  "quote_completed",
+  // Inside the WindowCAD iframe, reported by its own Analytics JavaScript and
+  // relayed by the theme. These are the only view of what happens between the
+  // frame loading and a quote coming back; without them a funnel that loses
+  // people inside the tool is indistinguishable from one nobody opened.
+  "quote_tool_engaged",
+  "quote_step",
+  "quote_tool_left"
   // Deliberately absent: `visitor_seen`, which is a statement about identity
   // and means nothing without one, and `scroll_depth`, which fires four times
   // per page and would cost far more rows than the count is worth. Scroll is

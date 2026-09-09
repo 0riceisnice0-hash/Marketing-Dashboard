@@ -5,7 +5,8 @@ import { BrowserTestCall } from "./reception-call.js";
 // click away, but it no longer sits between the user and the numbers.
 const primaryTabs = [
   { id: "tracker", label: "Website Tracker", icon: "W" },
-  { id: "reception", label: "AI Receptionist", icon: "R" }
+  { id: "reception", label: "AI Receptionist", icon: "R" },
+  { id: "windowcad", label: "WindowCAD", icon: "Q" }
 ];
 
 const workspaceTabs = [
@@ -22,6 +23,7 @@ const tabs = [...primaryTabs, ...workspaceTabs];
 const viewCopy = {
   tracker: "Consent-led attribution. Customer details stay in WordPress and AdminBase.",
   reception: "Out-of-hours call handling. Browser test calls, transcripts, summaries and simulated email notifications.",
+  windowcad: "Inside the quote tool: what they pick, how far they get, where they stop.",
   dashboard: "What matters now, what is blocked, and what has recently shipped.",
   projects: "Choose a work area, then link tickets, ideas, plans, and updates into it.",
   tickets: "Requests stay separate, with each one linked to a project area.",
@@ -517,6 +519,7 @@ function render() {
   const renderers = {
     tracker: renderTrackerArea,
     reception: renderReceptionArea,
+    windowcad: renderWindowcadArea,
     dashboard: renderDashboard,
     projects: renderProjects,
     tickets: renderTickets,
@@ -1861,9 +1864,111 @@ function renderTrackerArea() {
   loadWebsite(true);
 }
 
+function renderWindowcadArea() {
+  const periods = [7, 30, 90, 365];
+  view.innerHTML = `
+    <div class="wt-shell">
+      <div class="wt-shell__head">
+        <div class="fw-periods" role="group" aria-label="Reporting period">
+          ${periods.map((days) => `
+            <button class="fw-period ${websitePeriodDays === days ? "is-active" : ""}"
+              onclick="window.dashboardWebsitePeriod(${days})">
+              ${days === 365 ? "1 year" : `${days} days`}
+            </button>
+          `).join("")}
+        </div>
+        <div class="wt-shell__actions">
+          <button class="tool-action" onclick="window.dashboardWebsiteRefresh()">Refresh</button>
+        </div>
+      </div>
+      <p id="website-status" class="result-note">Loading quote tool reporting...</p>
+      <div id="website-app" class="website-app"></div>
+    </div>
+  `;
+  loadWebsite(true);
+}
+
+function renderWindowcadTool() {
+  const mount = $("#website-app");
+  if (!mount || !websiteState) return;
+  const s = websiteState;
+  const opened = Number(s.quoteJourneys || 0);
+  const engaged = Number(s.toolEngaged || 0);
+  const finished = Number(s.toolCompletedAfterEngaging || 0);
+  const abandoned = Math.max(0, engaged - finished);
+  const choices = Array.isArray(s.toolChoices) ? s.toolChoices : [];
+  const leaves = Array.isArray(s.toolLeaveSteps) ? s.toolLeaveSteps : [];
+  const depth = Array.isArray(s.toolDepth) ? s.toolDepth : [];
+  const rows = Array.isArray(s.toolTrailRows) ? s.toolTrailRows : [];
+
+  if (!engaged && !choices.length && !rows.length) {
+    mount.innerHTML = `
+      <section class="wt-panel">
+        <header class="wt-panel__head"><div><h4>Nothing recorded yet</h4>
+        <p>The designer reports its own steps through WindowCAD&rsquo;s Analytics JavaScript, and the site relays them. Both halves have to be live, and a visitor has to actually touch the tool.</p></div></header>
+      </section>`;
+    return;
+  }
+
+  const bar = (n, max) => `<span class="wt-funnel__bar"><i style="width:${Math.max(3, Math.round((n / Math.max(1, max)) * 100))}%"></i></span>`;
+  const list = (items, labelKey, title) => {
+    if (!items.length) return "";
+    const max = Math.max(1, ...items.map((i) => Number(i.count || 0)));
+    return `<h5 class="wt-quotetool__head">${title}</h5><div class="wt-funnel__steps">${items.map((i) => `
+      <div class="wt-funnel__step">
+        <span class="wt-funnel__label">${escapeHtml(String(i[labelKey] || "unnamed"))}</span>
+        ${bar(Number(i.count || 0), max)}
+        <span class="wt-funnel__value">${wtFmt(Number(i.count || 0))}</span>
+      </div>`).join("")}</div>`;
+  };
+
+  // Group the raw rows into per-journey trails, oldest event first.
+  const trails = new Map();
+  rows.slice().reverse().forEach((r) => {
+    if (!trails.has(r.journey_id)) trails.set(r.journey_id, []);
+    trails.get(r.journey_id).push(r);
+  });
+  const recent = [...trails.entries()].slice(-14).reverse();
+
+  const depthMax = Math.max(1, ...depth.map((d) => Number(d.journeys || 0)));
+
+  mount.innerHTML = `
+    <div class="wt-kpis">
+      <article class="wt-kpi wt-kpi--lead"><strong>${wtFmt(engaged)}</strong><span>Used the designer</span><small>touched it, not just loaded it</small></article>
+      <article class="wt-kpi"><strong>${wtFmt(opened)}</strong><span>Opened</span><small>quote tool deliberately opened</small></article>
+      <article class="wt-kpi"><strong>${wtFmt(finished)}</strong><span>Got a quote</span><small>completed after engaging</small></article>
+      <article class="wt-kpi"><strong>${wtFmt(abandoned)}</strong><span>Gave up inside</span><small>${engaged ? Math.round((abandoned / engaged) * 100) : 0}% of those who started</small></article>
+    </div>
+    <div class="wt-grid wt-grid--two">
+      <section class="wt-panel">
+        <header class="wt-panel__head"><div><h4>How far they get</h4><p>Journeys by number of screens advanced.</p></div></header>
+        ${depth.length ? `<div class="wt-funnel__steps">${depth.map((d) => `
+          <div class="wt-funnel__step">
+            <span class="wt-funnel__label">${Number(d.depth) === 1 ? "1 screen" : escapeHtml(String(d.depth)) + " screens"}</span>
+            ${bar(Number(d.journeys || 0), depthMax)}
+            <span class="wt-funnel__value">${wtFmt(Number(d.journeys || 0))}</span>
+          </div>`).join("")}</div>` : `<p class="wt-empty">No screen advances recorded yet.</p>`}
+        ${list(leaves, "step", "Where they gave up")}
+      </section>
+      <section class="wt-panel">
+        <header class="wt-panel__head"><div><h4>What they pick</h4><p>Products, styles and colours, counted once per person.</p></div></header>
+        ${choices.length ? list(choices, "choice", "Most chosen") : `<p class="wt-empty">No choices recorded yet.</p>`}
+      </section>
+    </div>
+    <section class="wt-panel">
+      <header class="wt-panel__head"><div><h4>Recent journeys</h4><p>What each person did, screen by screen.</p></div></header>
+      ${recent.length ? `<div class="wc-trails">${recent.map(([id, evts]) => `
+        <article class="wc-trail">
+          <header><code>${escapeHtml(String(id).slice(0, 22))}</code><time>${escapeHtml(String(evts[0].occurred_at || "").slice(0, 16).replace("T", " "))}</time></header>
+          <ol>${evts.map((e) => `<li class="wc-trail__${escapeHtml(e.event_type)}"><b>${escapeHtml(e.event_type.replace("quote_", "").replace(/_/g, " "))}</b>${e.cta ? " — " + escapeHtml(e.cta) : ""}</li>`).join("")}</ol>
+        </article>`).join("")}</div>` : `<p class="wt-empty">No journeys yet.</p>`}
+    </section>
+  `;
+}
+
 function setWebsitePeriod(days) {
   websitePeriodDays = days;
-  renderTrackerArea();
+  if (current === "windowcad") renderWindowcadArea(); else renderTrackerArea();
 }
 
 function renderWebsiteToolShell() {
@@ -1935,11 +2040,11 @@ async function loadCurrentTool(force = false) {
 async function loadWebsite(force = false) {
   const mount = $("#website-app");
   const status = $("#website-status");
-  if (!mount || (!force && current !== "tracker" && current !== "tools" && selectedProjectKey !== "tools")) return;
+  if (!mount || (!force && current !== "tracker" && current !== "windowcad" && current !== "tools" && selectedProjectKey !== "tools")) return;
   try {
     websiteState = await api(`/api/fenster/website/state?days=${websitePeriodDays}`);
     status.textContent = "";
-    renderWebsiteTool();
+    if (current === "windowcad") renderWindowcadTool(); else renderWebsiteTool();
   } catch (error) {
     status.textContent = error.message;
     mount.innerHTML = "";

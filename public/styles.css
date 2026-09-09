@@ -3897,3 +3897,43 @@ dialog::backdrop {
   font-size: 0.875rem;
   line-height: 1.5;
 }
+
+/* WindowCAD tab: per-journey trails. */
+.wc-trails {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.wc-trail {
+  padding: 12px 14px;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  border-radius: 10px;
+  background: var(--panel, #fff);
+}
+
+.wc-trail header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.wc-trail code { font-size: 0.6875rem; }
+
+.wc-trail ol {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 3px;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+}
+
+.wc-trail li b { font-weight: 600; }
+.wc-trail__quote_tool_engaged b { color: var(--accent, #2eac66); }
+.wc-trail__quote_completed b { color: var(--accent, #2eac66); }
+.wc-trail__quote_tool_left b { color: var(--muted); }

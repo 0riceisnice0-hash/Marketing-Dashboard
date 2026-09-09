@@ -1501,7 +1501,7 @@ async function fensterWebsiteState(env, request) {
    * gives the one thing that was invisible before any of this existed: where
    * people give up inside a third-party iframe.
    */
-  const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps, toolChoices] = await Promise.all([
+  const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps, toolChoices, toolDepth, toolTrailRows] = await Promise.all([
     env.DB.prepare(`
       SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
       WHERE occurred_at >= ? AND event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
@@ -1531,6 +1531,29 @@ async function fensterWebsiteState(env, request) {
       WHERE occurred_at >= ? AND event_type = 'quote_step' AND environment IN ('production','legacy')
         AND cta <> '' AND cta NOT LIKE 'step %'
       GROUP BY cta ORDER BY count DESC LIMIT 12
+    `).bind(since).all(),
+    /*
+     * HOW DEEP THEY GET. `event_value` is not populated for these, so depth is
+     * the count of `quote_step` rows on the journey -- one per screen advanced.
+     * Bucketed in the client; this returns the raw per-journey depth.
+     */
+    env.DB.prepare(`
+      SELECT depth, COUNT(*) AS journeys FROM (
+        SELECT journey_id, COUNT(*) AS depth FROM website_events
+        WHERE occurred_at >= ? AND event_type = 'quote_step' AND environment IN ('production','legacy')
+        GROUP BY journey_id
+      ) GROUP BY depth ORDER BY depth
+    `).bind(since).all(),
+    /*
+     * THE TRAILS THEMSELVES. One row per event, ordered, so the tab can show
+     * what an individual person did screen by screen. Capped hard: this is a
+     * detail view, not an export.
+     */
+    env.DB.prepare(`
+      SELECT journey_id, event_type, cta, occurred_at FROM website_events
+      WHERE occurred_at >= ? AND environment IN ('production','legacy')
+        AND event_type IN ('quote_tool_engaged','quote_step','quote_tool_left','quote_completed')
+      ORDER BY occurred_at DESC LIMIT 400
     `).bind(since).all()
   ]);
 
@@ -1639,6 +1662,8 @@ async function fensterWebsiteState(env, request) {
     toolStepEvents: totals.quote_step || 0,
     toolLeaveSteps: toolLeaveSteps.results || [],
     toolChoices: toolChoices.results || [],
+    toolDepth: toolDepth.results || [],
+    toolTrailRows: toolTrailRows.results || [],
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     legendChats: Number(chatCount?.count || 0),
     chats: chats.results || [],

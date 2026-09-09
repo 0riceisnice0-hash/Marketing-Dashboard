@@ -2028,6 +2028,9 @@ function wtOverview() {
     ${wtTrend()}
     <div class="wt-grid wt-grid--two">
       ${wtFunnel()}
+      ${wtQuoteTool()}
+    </div>
+    <div class="wt-grid wt-grid--two">
       ${wtConsent()}
     </div>
     ${wtDecision()}
@@ -2214,10 +2217,16 @@ function wtTrend() {
 }
 
 function wtFunnel() {
+  const engaged = Number(websiteState.toolEngaged || 0);
   const steps = [
     ["Consented visitors", Number(websiteState.uniqueVisitors || 0), "accepted optional cookies"],
     ["CTA clicks", Number(websiteState.ctaClicks || 0), "chose a commercial action"],
     ["Quote starts", Number(websiteState.quoteJourneys || 0), "deliberately opened"],
+    /* ADDED ONLY ONCE IT HAS DATA. A step that is permanently zero because its
+       source is not deployed yet reads as a funnel where everybody dies, which
+       is worse than not showing it. It appears by itself when the bridge is
+       live. */
+    ...(engaged ? [["Tool engaged", engaged, "actually used the designer"]] : []),
     ["Leads", Number(websiteState.quotes || 0) + Number(websiteState.forms || 0), "quote completed or form sent"]
   ];
   const max = Math.max(1, ...steps.map(([, value]) => value));
@@ -2238,6 +2247,66 @@ function wtFunnel() {
           </div>
         `).join("")}
       </div>
+    </section>
+  `;
+}
+
+/*
+ * INSIDE THE QUOTE TOOL.
+ *
+ * Everything else on this page stops at the edge of the WindowCAD iframe: the
+ * funnel could show a quote being opened and a quote coming back, and NOTHING
+ * about the minutes in between. A funnel that lost people inside the designer
+ * was indistinguishable from one nobody opened, which is why the September 2026
+ * lead drop had to be diagnosed from raw access logs.
+ *
+ * The figures are journeys, not events -- the designer redraws constantly, so
+ * counting `quote_step` rows would measure rendering, not people.
+ */
+function wtQuoteTool() {
+  const opened = Number(websiteState.quoteJourneys || 0);
+  const engaged = Number(websiteState.toolEngaged || 0);
+  const finished = Number(websiteState.toolCompletedAfterEngaging || 0);
+  const leaveSteps = Array.isArray(websiteState.toolLeaveSteps) ? websiteState.toolLeaveSteps : [];
+  const finishRate = engaged ? Math.round((finished / engaged) * 100) : 0;
+  const abandoned = Math.max(0, engaged - finished);
+
+  if (!engaged && !leaveSteps.length) {
+    return `
+      <section class="wt-panel wt-quotetool">
+        <header class="wt-panel__head">
+          <div><h4>Inside the quote tool</h4><p>What happens between opening the designer and a quote coming back.</p></div>
+        </header>
+        <p class="wt-empty">Nothing recorded yet. The tool reports its own steps through WindowCAD&rsquo;s Analytics JavaScript and the site relays them &mdash; both halves have to be live before anything appears here.</p>
+      </section>
+    `;
+  }
+
+  const maxLeave = Math.max(1, ...leaveSteps.map((row) => Number(row.count || 0)));
+  return `
+    <section class="wt-panel wt-quotetool">
+      <header class="wt-panel__head">
+        <div><h4>Inside the quote tool</h4><p>What happens between opening the designer and a quote coming back.</p></div>
+        <strong class="wt-panel__figure">${finishRate}%<small>engaged to quote</small></strong>
+      </header>
+      <div class="wt-consent__figures">
+        <article><strong>${wtFmt(opened)}</strong><span>Opened</span></article>
+        <article><strong>${wtFmt(engaged)}</strong><span>Actually used it</span></article>
+        <article><strong>${wtFmt(finished)}</strong><span>Got a quote</span></article>
+        <article><strong>${wtFmt(abandoned)}</strong><span>Gave up inside</span></article>
+      </div>
+      ${leaveSteps.length ? `
+        <h5 class="wt-quotetool__head">Where they gave up</h5>
+        <div class="wt-funnel__steps">
+          ${leaveSteps.map((row) => `
+            <div class="wt-funnel__step">
+              <span class="wt-funnel__label">${escapeHtml(String(row.step || "unnamed screen"))}</span>
+              <span class="wt-funnel__bar"><i style="width:${Math.max(3, Math.round((Number(row.count || 0) / maxLeave) * 100))}%"></i></span>
+              <span class="wt-funnel__value">${wtFmt(Number(row.count || 0))}</span>
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
     </section>
   `;
 }

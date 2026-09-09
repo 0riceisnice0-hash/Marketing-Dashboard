@@ -1489,6 +1489,39 @@ async function fensterWebsiteState(env, request) {
   `).bind(since).first();
 
   /*
+   * INSIDE THE WINDOWCAD TOOL. Reported by the tool's own Analytics JavaScript
+   * and relayed by the theme; see the bridge in `src/js/main.js`.
+   *
+   * Counted by JOURNEY, not by event. The designer re-renders constantly and a
+   * visitor generates many `quote_step` rows, so a raw count answers "how much
+   * did the tool redraw" rather than "how many people got that far", which is
+   * the only question this section exists to answer.
+   *
+   * `quote_tool_left` carries the LAST screen reached in `cta`, so grouping it
+   * gives the one thing that was invisible before any of this existed: where
+   * people give up inside a third-party iframe.
+   */
+  const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps] = await Promise.all([
+    env.DB.prepare(`
+      SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
+      WHERE occurred_at >= ? AND event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
+    `).bind(since).first(),
+    env.DB.prepare(`
+      SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
+      WHERE occurred_at >= ? AND event_type = 'quote_completed' AND environment IN ('production','legacy')
+        AND journey_id IN (
+          SELECT journey_id FROM website_events
+          WHERE occurred_at >= ? AND event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
+        )
+    `).bind(since, since).first(),
+    env.DB.prepare(`
+      SELECT cta AS step, COUNT(DISTINCT journey_id) AS count FROM website_events
+      WHERE occurred_at >= ? AND event_type = 'quote_tool_left' AND environment IN ('production','legacy')
+      GROUP BY cta ORDER BY count DESC LIMIT 8
+    `).bind(since).all()
+  ]);
+
+  /*
    * AUTOMATED TRAFFIC IS FILTERED AT THE WRITE BOUNDARY, NOT HERE.
    *
    * `websiteEvent` drops a crawler before it writes anything, so no bot row
@@ -1587,6 +1620,11 @@ async function fensterWebsiteState(env, request) {
     pageEngagements: totals.page_engaged || 0,
     scrollDepths: totals.scroll_depth || 0,
     quotes: totals.quote_completed || 0,
+    toolEngaged: Number(toolEngaged?.count || 0),
+    toolCompletedAfterEngaging: Number(toolCompletedAfterEngaging?.count || 0),
+    toolLeft: totals.quote_tool_left || 0,
+    toolStepEvents: totals.quote_step || 0,
+    toolLeaveSteps: toolLeaveSteps.results || [],
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     legendChats: Number(chatCount?.count || 0),
     chats: chats.results || [],

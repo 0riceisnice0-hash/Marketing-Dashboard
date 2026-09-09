@@ -1405,6 +1405,25 @@ async function fensterWebsiteChat(env, value) {
  * the decision COUNT is exact -- which is what the coverage figure depends on --
  * but the four-way necessary/analytics/marketing/all split is approximate.
  */
+/*
+ * A JOURNEY THAT ONLY EVER FIRED `page_view` AND `visitor_seen` DID NOTHING.
+ * No scroll, no engagement, no click, no form, no quote frame. On 2026-09-09
+ * that was 2,614 of 4,388 journeys since 10 August -- 59.6% -- and it inflated
+ * every visitor count, every page-view total and every rate computed off them.
+ *
+ * THIS HAS TO BE A READ FILTER AND THAT IS NOT A CONTRADICTION OF THE
+ * WRITE-BOUNDARY RULE ABOVE. Crawlers that announce themselves are still
+ * dropped at ingest, where they can be. Whether a journey ever amounted to
+ * anything is not knowable when its first page_view arrives; it is only
+ * knowable afterwards. So it is defined ONCE, here, and every count that cares
+ * uses this same fragment rather than each query inventing its own.
+ */
+const LIVE_JOURNEY = `journey_id IN (
+  SELECT journey_id FROM website_events
+  WHERE environment IN ('production','legacy')
+    AND event_type NOT IN ('page_view','visitor_seen')
+)`;
+
 async function fensterWebsiteState(env, request) {
   /*
    * The period was hardcoded to 30 days while the tracker only had four days of
@@ -1417,9 +1436,9 @@ async function fensterWebsiteState(env, request) {
     : 30;
   const since = new Date(Date.now() - periodDays * 86400000).toISOString();
   const [events, journeys, uniqueVisitors, recent, visitors, chats, chatCount, outcomes, consent, acquisition, statistical] = await Promise.all([
-    env.DB.prepare("SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? AND environment IN ('production','legacy') GROUP BY event_type").bind(since).all(),
-    env.DB.prepare("SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ? AND environment IN ('production','legacy')").bind(since).first(),
-    env.DB.prepare("SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ? AND environment IN ('production','legacy')").bind(since).first(),
+    env.DB.prepare(`SELECT event_type, COUNT(*) AS count FROM website_events WHERE occurred_at >= ? AND environment IN ('production','legacy') AND ${LIVE_JOURNEY} GROUP BY event_type`).bind(since).all(),
+    env.DB.prepare(`SELECT COUNT(*) AS count FROM website_journeys WHERE first_event_at >= ? AND environment IN ('production','legacy') AND ${LIVE_JOURNEY}`).bind(since).first(),
+    env.DB.prepare(`SELECT COUNT(*) AS count FROM website_visitors WHERE last_seen_at >= ? AND environment IN ('production','legacy') AND visitor_id IN (SELECT visitor_id FROM website_journeys WHERE ${LIVE_JOURNEY})`).bind(since).first(),
     env.DB.prepare(`
       SELECT e.event_type, e.occurred_at, e.page_path, e.cta, e.product_collection, e.price_amount, e.price_currency,
         j.journey_id, j.landing_path, j.source, j.medium, j.campaign, COALESCE(o.status, 'new') AS outcome_status
@@ -1515,6 +1534,16 @@ async function fensterWebsiteState(env, request) {
    * bridge below only covers the days since it started reporting, so the two
    * are kept apart rather than averaged into one misleading rate.
    */
+  const deadJourneys = await env.DB.prepare(`
+    SELECT COUNT(*) AS count FROM website_journeys
+    WHERE first_event_at >= ? AND environment IN ('production','legacy')
+      AND journey_id NOT IN (
+        SELECT journey_id FROM website_events
+        WHERE environment IN ('production','legacy')
+          AND event_type NOT IN ('page_view','visitor_seen')
+      )
+  `).bind(since).first();
+
   const [quoteDaily, quoteTotals, quotePages, quoteSources] = await Promise.all([
     env.DB.prepare(`
       SELECT substr(occurred_at, 1, 10) AS day,
@@ -1767,6 +1796,7 @@ async function fensterWebsiteState(env, request) {
     toolSince: toolSince,
     quoteDaily: quoteDaily.results || [],
     quoteTotals: quoteTotals || {},
+    deadJourneys: Number(deadJourneys?.count || 0),
     quotePages: quotePages.results || [],
     quoteSources: quoteSources.results || [],
     toolDaily: toolDaily.results || [],

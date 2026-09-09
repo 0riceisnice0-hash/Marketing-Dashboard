@@ -1858,6 +1858,7 @@ function renderTrackerArea() {
         </div>
       </div>
       <p id="website-status" class="result-note">Loading website reporting...</p>
+      <div id="website-dead"></div>
       <div id="website-app" class="website-app"></div>
     </div>
   `;
@@ -2172,6 +2173,13 @@ function wtSeconds(value) {
 function renderWebsiteTool() {
   const mount = $("#website-app");
   if (!mount || !websiteState) return;
+  const deadNote = $("#website-dead");
+  if (deadNote) {
+    const dead = Number(websiteState.deadJourneys || 0);
+    deadNote.innerHTML = dead
+      ? `<p class="wc-scope">${wtFmt(dead)} journeys opened a page and did nothing else &mdash; no scroll, no click, no form. They are excluded from every figure below.</p>`
+      : "";
+  }
   /*
    * Tabs are named for the question each answers, not for the table behind it.
    * "Leads" did not exist before: the completed quotes and sent forms were only

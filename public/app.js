@@ -2177,7 +2177,7 @@ function renderWebsiteTool() {
   if (deadNote) {
     const dead = Number(websiteState.deadJourneys || 0);
     deadNote.innerHTML = dead
-      ? `<p class="wc-scope">${wtFmt(dead)} journeys opened a page and did nothing else &mdash; no scroll, no click, no form. They are excluded from every figure below.</p>`
+      ? `<p class="wc-scope">${wtFmt(dead)} journeys opened a page and did nothing else &mdash; no scroll, no click, no form, and a quote frame loading by itself does not count. They are excluded from every figure below. Nothing a person actually did is removed: quotes, forms and clicks are all still counted in full.</p>`
       : "";
   }
   /*

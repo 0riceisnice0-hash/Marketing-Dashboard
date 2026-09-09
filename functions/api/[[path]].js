@@ -1421,7 +1421,7 @@ async function fensterWebsiteChat(env, value) {
 const LIVE_JOURNEY = `journey_id IN (
   SELECT journey_id FROM website_events
   WHERE environment IN ('production','legacy')
-    AND event_type NOT IN ('page_view','visitor_seen')
+    AND event_type NOT IN ('page_view','visitor_seen','quote_iframe_loaded')
 )`;
 
 async function fensterWebsiteState(env, request) {
@@ -1561,6 +1561,7 @@ async function fensterWebsiteState(env, request) {
       FROM website_events
       WHERE occurred_at >= ? AND environment IN ('production','legacy')
         AND event_type IN ('quote_iframe_loaded','quote_opened','quote_completed')
+        AND ${LIVE_JOURNEY}
       GROUP BY day ORDER BY day
     `).bind(since).all(),
     env.DB.prepare(`
@@ -1572,6 +1573,7 @@ async function fensterWebsiteState(env, request) {
       FROM website_events
       WHERE occurred_at >= ? AND environment IN ('production','legacy')
         AND event_type IN ('quote_iframe_loaded','quote_opened','quote_completed')
+        AND ${LIVE_JOURNEY}
     `).bind(since).first(),
     /*
      * WHICH PAGE THE QUOTE IS STARTED FROM. `quote_completed` arrives from a
@@ -1584,6 +1586,7 @@ async function fensterWebsiteState(env, request) {
       FROM website_events
       WHERE occurred_at >= ? AND environment IN ('production','legacy')
         AND event_type = 'quote_opened' AND page_path <> ''
+        AND ${LIVE_JOURNEY}
       GROUP BY page ORDER BY opened DESC LIMIT 10
     `).bind(since).all(),
     /* What brings the people who finish one. */
@@ -1596,6 +1599,7 @@ async function fensterWebsiteState(env, request) {
       JOIN website_journeys w ON w.journey_id = e.journey_id
       WHERE e.occurred_at >= ? AND e.environment IN ('production','legacy')
         AND e.event_type = 'quote_completed'
+        AND e.${LIVE_JOURNEY}
       GROUP BY src ORDER BY quotes DESC LIMIT 8
     `).bind(since).all()
   ]);
@@ -1611,6 +1615,7 @@ async function fensterWebsiteState(env, request) {
     env.DB.prepare(`
       SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
       WHERE occurred_at >= ? AND event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
+        AND ${LIVE_JOURNEY}
     `).bind(toolSince).first(),
     env.DB.prepare(`
       SELECT COUNT(DISTINCT journey_id) AS count FROM website_events

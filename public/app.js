@@ -1892,107 +1892,144 @@ function renderWindowcadTool() {
   const mount = $("#website-app");
   if (!mount || !websiteState) return;
   const s = websiteState;
+
+  const t = s.quoteTotals || {};
+  const seen = Number(t.seen || 0);
+  const opened = Number(t.opened || 0);
+  const completed = Number(t.completed || 0);
+  const daily = Array.isArray(s.quoteDaily) ? s.quoteDaily : [];
+
   const engaged = Number(s.toolEngaged || 0);
   const finished = Number(s.toolCompletedAfterEngaging || 0);
-  const abandoned = Math.max(0, engaged - finished);
   const untouched = Number(s.toolUntouched || 0);
   const choices = Array.isArray(s.toolChoices) ? s.toolChoices : [];
   const leaves = Array.isArray(s.toolLeaveSteps) ? s.toolLeaveSteps : [];
   const depth = Array.isArray(s.toolDepth) ? s.toolDepth : [];
-  const daily = Array.isArray(s.toolDaily) ? s.toolDaily : [];
   const rows = Array.isArray(s.toolTrailRows) ? s.toolTrailRows : [];
 
-  if (!engaged && !rows.length) {
-    mount.innerHTML = `
-      <section class="wt-panel">
-        <header class="wt-panel__head"><div><h4>Nothing recorded yet</h4>
-        <p>Only journeys where somebody actually <strong>touched</strong> the designer are counted here. ${untouched ? wtFmt(untouched) + " loaded it without interacting and are excluded." : ""}</p></div></header>
-      </section>`;
-    return;
-  }
-
-  const rate = engaged ? Math.round((finished / engaged) * 100) : 0;
-  const since = String(s.toolSince || "").slice(0, 10);
-  const sinceLabel = since
-    ? new Date(since + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "long" })
-    : "";
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 
   mount.innerHTML = `
-    ${sinceLabel ? `<p class="wc-scope">Everything here covers <strong>${escapeHtml(sinceLabel)} onwards</strong> &mdash; when the designer started reporting its own steps. The period buttons above do not stretch it further back, because there is nothing further back to show.</p>` : ""}
     <div class="wt-kpis">
-      <article class="wt-kpi wt-kpi--lead"><strong>${wtFmt(engaged)}</strong><span>Used the designer</span><small>interacted, not just loaded</small></article>
-      <article class="wt-kpi"><strong>${wtFmt(finished)}</strong><span>Got a quote</span><small>${rate}% of those who started</small></article>
-      <article class="wt-kpi"><strong>${wtFmt(abandoned)}</strong><span>Gave up inside</span><small>started and stopped</small></article>
-      <article class="wt-kpi"><strong>${wtFmt(untouched)}</strong><span>Loaded, never touched</span><small>excluded from every figure here</small></article>
+      <article class="wt-kpi wt-kpi--lead"><strong>${wtFmt(completed)}</strong><span>Quotes completed</span><small>${pct(completed, opened)}% of everyone who opened it</small></article>
+      <article class="wt-kpi"><strong>${wtFmt(opened)}</strong><span>Opened the tool</span><small>${pct(opened, seen)}% of those who saw it</small></article>
+      <article class="wt-kpi"><strong>${wtFmt(seen)}</strong><span>Saw the tool</span><small>frame loaded on a page</small></article>
+      <article class="wt-kpi"><strong>${pct(completed, seen)}%</strong><span>Seen to quote</span><small>the whole funnel, end to end</small></article>
     </div>
-    ${wcTimeChart(daily)}
-    <div class="wt-grid wt-grid--two">
-      ${wcBarPanel("How far they get", "Journeys by screens advanced.", depth.map((d) => ({ label: Number(d.depth) === 1 ? "1 screen" : d.depth + " screens", count: Number(d.journeys || 0) })), "var(--blue)")}
-      ${wcBarPanel("What they pick", "Products, styles and colours. One vote per person.", choices.map((c) => ({ label: c.choice, count: Number(c.count || 0) })), "var(--green)")}
-    </div>
-    ${leaves.length ? wcBarPanel("Where they give up", "The last screen reached before leaving.", leaves.map((l) => ({ label: l.step, count: Number(l.count || 0) })), "var(--amber)") : ""}
-    ${wcTrails(rows)}
+
+    ${wcFunnel([
+      { label: "Saw the tool", value: seen, hue: "var(--soft-2)", ink: "var(--ink)" },
+      { label: "Opened it", value: opened, hue: "var(--blue)", ink: "#fff" },
+      { label: "Completed a quote", value: completed, hue: "var(--green)", ink: "#fff" }
+    ])}
+
+    ${wcDailyChart(daily)}
+
+    <section class="wt-panel wc-inside">
+      <header class="wt-panel__head">
+        <div><h4>Inside the designer</h4><p>What people pick and where they stop, reported by the tool itself.</p></div>
+        ${engaged ? `<strong class="wt-panel__figure">${wtFmt(engaged)}<small>used it</small></strong>` : ""}
+      </header>
+      ${engaged || rows.length ? `
+        <div class="wc-inside__stats">
+          <span><b>${wtFmt(engaged)}</b> used it</span>
+          <span><b>${wtFmt(finished)}</b> got a quote</span>
+          <span><b>${wtFmt(Math.max(0, engaged - finished))}</b> gave up inside</span>
+          <span class="wc-muted"><b>${wtFmt(untouched)}</b> loaded without touching it &mdash; excluded</span>
+        </div>
+        <div class="wc-inside__grid">
+          ${wcBars("What they pick", choices.map((c) => ({ label: c.choice, count: Number(c.count || 0) })), "var(--green)")}
+          ${wcBars("How far they get", depth.map((d) => ({ label: Number(d.depth) === 1 ? "1 screen" : d.depth + " screens", count: Number(d.journeys || 0) })), "var(--blue)")}
+          ${wcBars("Where they give up", leaves.map((l) => ({ label: l.step, count: Number(l.count || 0) })), "var(--amber)")}
+        </div>
+        ${wcTrails(rows)}
+      ` : `
+        <p class="wc-empty-note">No step detail yet. The designer reports its own screens through WindowCAD&rsquo;s Analytics JavaScript and the site relays them; a visitor has to actually touch the tool for a row to appear. ${untouched ? `<b>${wtFmt(untouched)}</b> loaded it without interacting in this period &mdash; those are excluded on purpose.` : ""}</p>
+      `}
+    </section>
   `;
 }
 
-/* Single series, one hue, thin marks, recessive axis, values direct-labelled.
-   No legend box: the panel title names the series. */
-function wcBarPanel(title, hint, items, hue) {
-  if (!items.length) {
-    return `<section class="wt-panel"><header class="wt-panel__head"><div><h4>${escapeHtml(title)}</h4><p>${escapeHtml(hint)}</p></div></header><p class="wt-empty">Nothing recorded yet.</p></section>`;
-  }
-  const max = Math.max(1, ...items.map((i) => i.count));
+/* An ordered funnel: three stages of one journey, so the width IS the number
+   and each stage carries its own drop-off. Not a pie, not three tiles. */
+function wcFunnel(stages) {
+  const max = Math.max(1, ...stages.map((x) => x.value));
   return `
     <section class="wt-panel">
-      <header class="wt-panel__head"><div><h4>${escapeHtml(title)}</h4><p>${escapeHtml(hint)}</p></div></header>
-      <div class="wc-bars">
-        ${items.map((i) => `
-          <div class="wc-bar" title="${escapeHtml(String(i.label || "unnamed"))}: ${wtFmt(i.count)}">
-            <span class="wc-bar__label">${escapeHtml(String(i.label || "unnamed"))}</span>
-            <span class="wc-bar__track"><i style="width:${Math.max(2, Math.round((i.count / max) * 100))}%;background:${hue}"></i></span>
-            <span class="wc-bar__value">${wtFmt(i.count)}</span>
-          </div>`).join("")}
+      <header class="wt-panel__head"><div><h4>The quote funnel</h4><p>Every stage from seeing the tool to a finished quote.</p></div></header>
+      <div class="wc-funnel">
+        ${stages.map((st, i) => {
+          const prev = i ? stages[i - 1].value : null;
+          const drop = prev && prev > st.value ? prev - st.value : 0;
+          return `
+            <div class="wc-funnel__row">
+              <span class="wc-funnel__name">${escapeHtml(st.label)}</span>
+              <span class="wc-funnel__bar">
+                <i style="width:${Math.max(4, Math.round((st.value / max) * 100))}%;background:${st.hue};color:${st.ink}">${wtFmt(st.value)}</i>
+              </span>
+              <span class="wc-funnel__drop">${drop ? "&minus;" + wtFmt(drop) : ""}</span>
+            </div>`;
+        }).join("")}
       </div>
     </section>`;
 }
 
-/* Change over time. Both measures are journeys, so they share one axis --
-   never two scales. The completed bar sits inside the used bar. */
-function wcTimeChart(daily) {
+/* Three stages of one funnel, same unit, one axis. Legend present because
+   there is more than one series; stages read light to dark. */
+function wcDailyChart(daily) {
   if (!daily.length) return "";
-  const max = Math.max(1, ...daily.map((d) => Number(d.engaged || 0)));
-  const w = Math.max(340, daily.length * 36);
-  const h = 140;
-  const bw = Math.max(9, Math.min(24, Math.floor(w / daily.length) - 12));
-  const base = h - 24;
-  const totalEngaged = daily.reduce((a, d) => a + Number(d.engaged || 0), 0);
+  const max = Math.max(1, ...daily.map((d) => Number(d.seen || 0)));
+  const n = daily.length;
+  const w = Math.max(360, n * 30);
+  const h = 170;
+  const base = h - 26;
+  const slot = w / n;
+  const bw = Math.max(6, Math.min(18, slot - 10));
   return `
     <section class="wt-panel">
       <header class="wt-panel__head">
-        <div><h4>Use over time</h4><p>People who used the designer each day, and how many came away with a quote.</p></div>
-        <strong class="wt-panel__figure">${wtFmt(totalEngaged)}<small>used it in this period</small></strong>
+        <div><h4>Quote activity by day</h4><p>Seen, opened and completed across the period.</p></div>
+        <span class="wc-legend">
+          <b class="wc-key" style="background:var(--soft-2)"></b>Seen
+          <b class="wc-key" style="background:var(--blue)"></b>Opened
+          <b class="wc-key" style="background:var(--green)"></b>Completed
+        </span>
       </header>
       <div class="wc-chart">
-        <svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Designer use per day">
+        <svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Quote activity by day">
           <line x1="0" y1="${base}" x2="${w}" y2="${base}" stroke="var(--line)" stroke-width="1"/>
-          ${daily.map((d, idx) => {
-            const eng = Number(d.engaged || 0);
-            const done = Math.min(Number(d.completed || 0), eng);
-            const x = Math.round((idx + 0.5) * (w / daily.length) - bw / 2);
-            const bh = Math.max(2, Math.round((eng / max) * (base - 12)));
-            const dh = Math.round((done / max) * (base - 12));
-            return `
-              <g>
-                <title>${escapeHtml(d.day)} — ${eng} used it, ${done} got a quote</title>
-                <rect x="${x}" y="${base - bh}" width="${bw}" height="${bh}" rx="4" fill="var(--soft-2)"/>
-                ${dh ? `<rect x="${x}" y="${base - dh}" width="${bw}" height="${dh}" rx="4" fill="var(--green)"/>` : ""}
-                <text x="${x + bw / 2}" y="${h - 8}" text-anchor="middle" class="wc-chart__tick">${escapeHtml(String(d.day).slice(8))}</text>
-              </g>`;
+          ${daily.map((d, i) => {
+            const sv = Number(d.seen || 0), ov = Number(d.opened || 0), cv = Number(d.completed || 0);
+            const x = Math.round(i * slot + (slot - bw) / 2);
+            const bar = (v, fill, z) => {
+              const bh = Math.round((v / max) * (base - 14));
+              return bh > 0 ? `<rect x="${x}" y="${base - bh}" width="${bw}" height="${bh}" rx="3" fill="${fill}" opacity="${z}"/>` : "";
+            };
+            return `<g><title>${escapeHtml(d.day)} — ${sv} seen, ${ov} opened, ${cv} completed</title>
+              ${bar(sv, "var(--soft-2)", 1)}${bar(ov, "var(--blue)", 1)}${bar(cv, "var(--green)", 1)}
+              ${i % Math.ceil(n / 12) === 0 ? `<text x="${x + bw / 2}" y="${h - 9}" text-anchor="middle" class="wc-chart__tick">${escapeHtml(String(d.day).slice(5).replace("-", "/"))}</text>` : ""}
+            </g>`;
           }).join("")}
         </svg>
-        <p class="wc-chart__key"><b class="wc-key wc-key--soft"></b>Used the designer <b class="wc-key wc-key--green"></b>Came away with a quote</p>
       </div>
     </section>`;
+}
+
+function wcBars(title, items, hue) {
+  if (!items.length) return `<div class="wc-block"><h5>${escapeHtml(title)}</h5><p class="wc-muted">Nothing yet.</p></div>`;
+  const max = Math.max(1, ...items.map((i) => i.count));
+  return `
+    <div class="wc-block">
+      <h5>${escapeHtml(title)}</h5>
+      <div class="wc-bars">
+        ${items.slice(0, 10).map((i) => `
+          <div class="wc-bar" title="${escapeHtml(String(i.label || "unnamed"))}: ${wtFmt(i.count)}">
+            <span class="wc-bar__label">${escapeHtml(String(i.label || "unnamed"))}</span>
+            <span class="wc-bar__track"><i style="width:${Math.max(3, Math.round((i.count / max) * 100))}%;background:${hue}"></i></span>
+            <span class="wc-bar__value">${wtFmt(i.count)}</span>
+          </div>`).join("")}
+      </div>
+    </div>`;
 }
 
 function wcTrails(rows) {
@@ -2001,28 +2038,23 @@ function wcTrails(rows) {
     if (!trails.has(r.journey_id)) trails.set(r.journey_id, []);
     trails.get(r.journey_id).push(r);
   });
-  const recent = [...trails.entries()].slice(-14).reverse();
+  const recent = [...trails.entries()].slice(-12).reverse();
   if (!recent.length) return "";
   return `
-    <section class="wt-panel">
-      <header class="wt-panel__head"><div><h4>Recent journeys</h4><p>What each person did, screen by screen.</p></div></header>
-      <div class="wc-trails">
-        ${recent.map(([id, evts]) => {
-          const done = evts.some((e) => e.event_type === "quote_completed");
-          const mins = Math.max(0, Math.round((Date.parse(evts[evts.length - 1].occurred_at) - Date.parse(evts[0].occurred_at)) / 60000));
-          const steps = evts.filter((e) => e.event_type !== "quote_tool_left");
-          return `
-            <article class="wc-trail ${done ? "wc-trail--won" : ""}">
-              <header>
-                <code>${escapeHtml(String(id).slice(4, 14))}</code>
-                <time>${escapeHtml(String(evts[0].occurred_at || "").slice(11, 16))} · ${mins}m</time>
-              </header>
-              <ol>${steps.map((e) => `<li>${e.cta ? escapeHtml(e.cta) : "<i>advanced</i>"}</li>`).join("")}</ol>
-              <footer>${done ? "Got a quote" : "Stopped here"}</footer>
-            </article>`;
-        }).join("")}
-      </div>
-    </section>`;
+    <h5 class="wc-block__head">Recent journeys</h5>
+    <div class="wc-trails">
+      ${recent.map(([id, evts]) => {
+        const done = evts.some((e) => e.event_type === "quote_completed");
+        const mins = Math.max(0, Math.round((Date.parse(evts[evts.length - 1].occurred_at) - Date.parse(evts[0].occurred_at)) / 60000));
+        const steps = evts.filter((e) => e.event_type !== "quote_tool_left" && e.cta);
+        return `
+          <article class="wc-trail ${done ? "wc-trail--won" : ""}">
+            <header><code>${escapeHtml(String(id).slice(4, 12))}</code><time>${escapeHtml(String(evts[0].occurred_at || "").slice(11, 16))} · ${mins}m</time></header>
+            <ol>${steps.map((e) => `<li>${escapeHtml(e.cta)}</li>`).join("")}</ol>
+            <footer>${done ? "Got a quote" : "Stopped here"}</footer>
+          </article>`;
+      }).join("")}
+    </div>`;
 }
 
 function setWebsitePeriod(days) {

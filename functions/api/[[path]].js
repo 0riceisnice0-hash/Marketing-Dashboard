@@ -1509,6 +1509,35 @@ async function fensterWebsiteState(env, request) {
    * that cannot be measured for the whole window is not shown for the whole
    * window.
    */
+  /*
+   * THE QUOTE FUNNEL ITSELF, on the page's own period. This is the part with
+   * months of history: exposure, deliberate opens, completions. The in-tool
+   * bridge below only covers the days since it started reporting, so the two
+   * are kept apart rather than averaged into one misleading rate.
+   */
+  const [quoteDaily, quoteTotals] = await Promise.all([
+    env.DB.prepare(`
+      SELECT substr(occurred_at, 1, 10) AS day,
+        SUM(event_type = 'quote_iframe_loaded') AS seen,
+        SUM(event_type = 'quote_opened') AS opened,
+        SUM(event_type = 'quote_completed') AS completed
+      FROM website_events
+      WHERE occurred_at >= ? AND environment IN ('production','legacy')
+        AND event_type IN ('quote_iframe_loaded','quote_opened','quote_completed')
+      GROUP BY day ORDER BY day
+    `).bind(since).all(),
+    env.DB.prepare(`
+      SELECT
+        SUM(event_type = 'quote_iframe_loaded') AS seen,
+        SUM(event_type = 'quote_opened') AS opened,
+        SUM(event_type = 'quote_completed') AS completed,
+        COUNT(DISTINCT CASE WHEN event_type = 'quote_opened' THEN journey_id END) AS openers
+      FROM website_events
+      WHERE occurred_at >= ? AND environment IN ('production','legacy')
+        AND event_type IN ('quote_iframe_loaded','quote_opened','quote_completed')
+    `).bind(since).first()
+  ]);
+
   const bridgeFirst = await env.DB.prepare(`
     SELECT MIN(occurred_at) AS first FROM website_events
     WHERE event_type IN ('quote_tool_engaged','quote_step','quote_tool_left')
@@ -1711,6 +1740,8 @@ async function fensterWebsiteState(env, request) {
     toolTrailRows: toolTrailRows.results || [],
     toolUntouched: Number(toolUntouched?.count || 0),
     toolSince: toolSince,
+    quoteDaily: quoteDaily.results || [],
+    quoteTotals: quoteTotals || {},
     toolDaily: toolDaily.results || [],
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     legendChats: Number(chatCount?.count || 0),

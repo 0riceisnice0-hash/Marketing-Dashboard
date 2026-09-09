@@ -1895,9 +1895,16 @@ function renderWindowcadTool() {
   const s = websiteState;
 
   const t = s.quoteTotals || {};
+  const st = s.statistical || {};
   const seen = Number(t.seen || 0);
   const opened = Number(t.opened || 0);
-  const completed = Number(t.completed || 0);
+  /* A visitor who refuses cookies still finishes a quote, and it still becomes a
+     lead. Those arrive with Tracking "rejected-cookies", so there is no journey
+     to hang them on and they are only ever counted in the aggregate. Showing the
+     consented figure alone made a real lead look like it had vanished. */
+  const attributed = Number(t.completed || 0);
+  const unattributed = Math.max(0, Number(st.quoteCompletions || 0));
+  const completed = attributed + unattributed;
   const daily = Array.isArray(s.quoteDaily) ? s.quoteDaily : [];
 
   const engaged = Number(s.toolEngaged || 0);
@@ -1912,7 +1919,7 @@ function renderWindowcadTool() {
 
   mount.innerHTML = `
     <div class="wt-kpis">
-      <article class="wt-kpi wt-kpi--lead"><strong>${wtFmt(completed)}</strong><span>Quotes completed</span><small>${pct(completed, opened)}% of everyone who opened it</small></article>
+      <article class="wt-kpi wt-kpi--lead"><strong>${wtFmt(completed)}</strong><span>Quotes completed</span><small>${wtFmt(attributed)} traceable${unattributed ? ` &middot; ${wtFmt(unattributed)} refused cookies` : ""}</small></article>
       <article class="wt-kpi"><strong>${wtFmt(opened)}</strong><span>Opened the tool</span><small>${pct(opened, seen)}% of those who saw it</small></article>
       <article class="wt-kpi"><strong>${wtFmt(seen)}</strong><span>Saw the tool</span><small>frame loaded on a page</small></article>
       <article class="wt-kpi"><strong>${pct(completed, seen)}%</strong><span>Seen to quote</span><small>the whole funnel, end to end</small></article>
@@ -1924,6 +1931,7 @@ function renderWindowcadTool() {
       { label: "Completed a quote", value: completed, hue: "var(--green)", ink: "#fff" }
     ])}
 
+    ${unattributed ? `<p class="wc-scope">${wtFmt(unattributed)} of these quotes came from visitors who <strong>refused cookies</strong>. They are real leads and they are in WordPress and AdminBase, but they arrive with no journey reference, so they cannot appear in the chart, the pages or the sources below &mdash; only in the totals above.</p>` : ""}
     ${wcDailyChart(daily)}
 
     <div class="wt-grid wt-grid--two">

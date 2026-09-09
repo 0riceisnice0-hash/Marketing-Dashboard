@@ -1501,7 +1501,7 @@ async function fensterWebsiteState(env, request) {
    * gives the one thing that was invisible before any of this existed: where
    * people give up inside a third-party iframe.
    */
-  const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps] = await Promise.all([
+  const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps, toolChoices] = await Promise.all([
     env.DB.prepare(`
       SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
       WHERE occurred_at >= ? AND event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
@@ -1518,6 +1518,19 @@ async function fensterWebsiteState(env, request) {
       SELECT cta AS step, COUNT(DISTINCT journey_id) AS count FROM website_events
       WHERE occurred_at >= ? AND event_type = 'quote_tool_left' AND environment IN ('production','legacy')
       GROUP BY cta ORDER BY count DESC LIMIT 8
+    `).bind(since).all(),
+    /*
+     * WHAT PEOPLE ACTUALLY CHOOSE. Each `quote_step` carries the choice made on
+     * the screen it left -- the product, the frame style, the colour. Counted by
+     * journey so one person changing their mind six times is one vote, not six.
+     * Labels beginning "step " are screens somebody advanced past without
+     * choosing anything, and are excluded: they are depth, not a preference.
+     */
+    env.DB.prepare(`
+      SELECT cta AS choice, COUNT(DISTINCT journey_id) AS count FROM website_events
+      WHERE occurred_at >= ? AND event_type = 'quote_step' AND environment IN ('production','legacy')
+        AND cta <> '' AND cta NOT LIKE 'step %'
+      GROUP BY cta ORDER BY count DESC LIMIT 12
     `).bind(since).all()
   ]);
 
@@ -1625,6 +1638,7 @@ async function fensterWebsiteState(env, request) {
     toolLeft: totals.quote_tool_left || 0,
     toolStepEvents: totals.quote_step || 0,
     toolLeaveSteps: toolLeaveSteps.results || [],
+    toolChoices: toolChoices.results || [],
     calls: (totals.phone_click || 0) + (totals.email_click || 0),
     legendChats: Number(chatCount?.count || 0),
     chats: chats.results || [],

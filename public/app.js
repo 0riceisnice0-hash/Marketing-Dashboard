@@ -2268,14 +2268,15 @@ function wtQuoteTool() {
   const engaged = Number(websiteState.toolEngaged || 0);
   const finished = Number(websiteState.toolCompletedAfterEngaging || 0);
   const leaveSteps = Array.isArray(websiteState.toolLeaveSteps) ? websiteState.toolLeaveSteps : [];
+  const choices = Array.isArray(websiteState.toolChoices) ? websiteState.toolChoices : [];
   const finishRate = engaged ? Math.round((finished / engaged) * 100) : 0;
   const abandoned = Math.max(0, engaged - finished);
 
-  if (!engaged && !leaveSteps.length) {
+  if (!engaged && !leaveSteps.length && !choices.length) {
     return `
       <section class="wt-panel wt-quotetool">
         <header class="wt-panel__head">
-          <div><h4>Inside the quote tool</h4><p>What happens between opening the designer and a quote coming back.</p></div>
+          <div><h4>Inside the quote tool</h4><p>The product, style and colour chosen on each screen, and how far people get.</p></div>
         </header>
         <p class="wt-empty">Nothing recorded yet. The tool reports its own steps through WindowCAD&rsquo;s Analytics JavaScript and the site relays them &mdash; both halves have to be live before anything appears here.</p>
       </section>
@@ -2286,7 +2287,7 @@ function wtQuoteTool() {
   return `
     <section class="wt-panel wt-quotetool">
       <header class="wt-panel__head">
-        <div><h4>Inside the quote tool</h4><p>What happens between opening the designer and a quote coming back.</p></div>
+        <div><h4>Inside the quote tool</h4><p>The product, style and colour chosen on each screen, and how far people get.</p></div>
         <strong class="wt-panel__figure">${finishRate}%<small>engaged to quote</small></strong>
       </header>
       <div class="wt-consent__figures">
@@ -2295,6 +2296,18 @@ function wtQuoteTool() {
         <article><strong>${wtFmt(finished)}</strong><span>Got a quote</span></article>
         <article><strong>${wtFmt(abandoned)}</strong><span>Gave up inside</span></article>
       </div>
+      ${choices.length ? `
+        <h5 class="wt-quotetool__head">What they choose</h5>
+        <div class="wt-funnel__steps">
+          ${choices.map((row) => `
+            <div class="wt-funnel__step">
+              <span class="wt-funnel__label">${escapeHtml(String(row.choice || ""))}</span>
+              <span class="wt-funnel__bar"><i style="width:${Math.max(3, Math.round((Number(row.count || 0) / Math.max(1, ...choices.map((c) => Number(c.count || 0)))) * 100))}%"></i></span>
+              <span class="wt-funnel__value">${wtFmt(Number(row.count || 0))}</span>
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
       ${leaveSteps.length ? `
         <h5 class="wt-quotetool__head">Where they gave up</h5>
         <div class="wt-funnel__steps">

@@ -1952,6 +1952,7 @@ function renderWindowcadTool() {
           <span><b>${wtFmt(finished)}</b> got a quote</span>
           <span><b>${wtFmt(Math.max(0, engaged - finished))}</b> gave up inside</span>
           <span class="wc-muted"><b>${wtFmt(untouched)}</b> loaded without touching it &mdash; excluded</span>
+          ${Number(s.toolUnseen || 0) ? `<span class="wc-warn"><b>${wtFmt(Number(s.toolUnseen))}</b> completed a quote with no in-tool session recorded</span>` : ""}
         </div>
         <div class="wc-inside__grid">
           ${wcBars("What they pick", choices.map((c) => ({ label: c.choice, count: Number(c.count || 0) })), "var(--green)")}

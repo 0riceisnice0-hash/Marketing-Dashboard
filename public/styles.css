@@ -4129,3 +4129,6 @@ dialog::backdrop {
   font-size: 0.8125rem;
   line-height: 1.55;
 }
+
+.wc-warn { color: var(--amber); }
+.wc-warn b { font-size: 1.05rem; margin-right: 4px; }

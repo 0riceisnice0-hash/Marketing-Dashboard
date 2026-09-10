@@ -1611,7 +1611,7 @@ async function fensterWebsiteState(env, request) {
   `).first();
   const toolSince = bridgeFirst?.first && bridgeFirst.first > since ? bridgeFirst.first : since;
 
-  const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps, toolChoices, toolDepth, toolTrailRows, toolUntouched, toolDaily] = await Promise.all([
+  const [toolEngaged, toolCompletedAfterEngaging, toolLeaveSteps, toolChoices, toolDepth, toolTrailRows, toolUntouched, toolUnseen, toolDaily] = await Promise.all([
     env.DB.prepare(`
       SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
       WHERE occurred_at >= ? AND event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
@@ -1685,6 +1685,24 @@ async function fensterWebsiteState(env, request) {
         HAVING SUM(event_type = 'quote_iframe_loaded') > 0
            AND SUM(event_type = 'quote_tool_engaged') = 0
       )
+    `).bind(toolSince).first(),
+    /*
+     * COMPLETIONS THE BRIDGE NEVER SAW A SESSION FOR. On the night of 9 Sep a
+     * visitor completed two quotes from a consented journey and produced no
+     * quote_tool_engaged at all, while two other people the bridge did see
+     * completed nothing -- so the panel read "2 used it, 0 got a quote" on a
+     * night that produced four enquiries. True of what the bridge saw, useless
+     * as a picture of the night. Reported so the gap is stated rather than left
+     * for somebody to trip over.
+     */
+    env.DB.prepare(`
+      SELECT COUNT(DISTINCT journey_id) AS count FROM website_events
+      WHERE occurred_at >= ? AND event_type = 'quote_completed'
+        AND environment IN ('production','legacy')
+        AND journey_id NOT IN (
+          SELECT journey_id FROM website_events
+          WHERE event_type = 'quote_tool_engaged' AND environment IN ('production','legacy')
+        )
     `).bind(toolSince).first(),
     /* Daily shape, counted by journey. */
     env.DB.prepare(`
@@ -1806,6 +1824,7 @@ async function fensterWebsiteState(env, request) {
     toolDepth: toolDepth.results || [],
     toolTrailRows: toolTrailRows.results || [],
     toolUntouched: Number(toolUntouched?.count || 0),
+    toolUnseen: Number(toolUnseen?.count || 0),
     toolSince: toolSince,
     quoteDaily: quoteDaily.results || [],
     quoteTotals: quoteTotals || {},

@@ -1908,7 +1908,6 @@ function renderWindowcadTool() {
   const daily = Array.isArray(s.quoteDaily) ? s.quoteDaily : [];
 
   const engaged = Number(s.toolEngaged || 0);
-  const finished = Number(s.toolCompletedAfterEngaging || 0);
   const untouched = Number(s.toolUntouched || 0);
   const choices = Array.isArray(s.toolChoices) ? s.toolChoices : [];
   const leaves = Array.isArray(s.toolLeaveSteps) ? s.toolLeaveSteps : [];
@@ -1944,16 +1943,14 @@ function renderWindowcadTool() {
     <section class="wt-panel wc-inside">
       <header class="wt-panel__head">
         <div><h4>Inside the designer</h4><p>What people pick and where they stop, reported by the tool itself.</p></div>
-        ${engaged ? `<strong class="wt-panel__figure">${wtFmt(engaged)}<small>used it</small></strong>` : ""}
+        ${engaged ? `<strong class="wt-panel__figure">${wtFmt(engaged)}<small>sessions seen</small></strong>` : ""}
       </header>
       ${engaged || rows.length ? `
         <div class="wc-inside__stats">
-          <span><b>${wtFmt(engaged)}</b> used it</span>
-          <span><b>${wtFmt(finished)}</b> got a quote</span>
-          <span><b>${wtFmt(Math.max(0, engaged - finished))}</b> gave up inside</span>
+          <span><b>${wtFmt(engaged)}</b> sessions with step detail</span>
           <span class="wc-muted"><b>${wtFmt(untouched)}</b> loaded without touching it &mdash; excluded</span>
-          ${Number(s.toolUnseen || 0) ? `<span class="wc-warn"><b>${wtFmt(Number(s.toolUnseen))}</b> completed a quote with no in-tool session recorded</span>` : ""}
         </div>
+        <p class="wc-note">Whether somebody finished is not measured here &mdash; the FG2 reference on the quote already tells us that, and it is counted in the funnel above. This section is only what happened <em>inside</em> the designer, and it needs the tool's own script to have seen the session.</p>
         <div class="wc-inside__grid">
           ${wcBars("What they pick", choices.map((c) => ({ label: c.choice, count: Number(c.count || 0) })), "var(--green)")}
           ${wcBars("How far they get", depth.map((d) => ({ label: Number(d.depth) === 1 ? "1 screen" : d.depth + " screens", count: Number(d.journeys || 0) })), "var(--blue)")}
@@ -2258,9 +2255,6 @@ function wtOverview() {
     ${wtTrend()}
     <div class="wt-grid wt-grid--two">
       ${wtFunnel()}
-      ${wtQuoteTool()}
-    </div>
-    <div class="wt-grid wt-grid--two">
       ${wtConsent()}
     </div>
     ${wtDecision()}
@@ -2493,67 +2487,6 @@ function wtFunnel() {
  * The figures are journeys, not events -- the designer redraws constantly, so
  * counting `quote_step` rows would measure rendering, not people.
  */
-function wtQuoteTool() {
-  const opened = Number(websiteState.quoteJourneys || 0);
-  const engaged = Number(websiteState.toolEngaged || 0);
-  const finished = Number(websiteState.toolCompletedAfterEngaging || 0);
-  const leaveSteps = Array.isArray(websiteState.toolLeaveSteps) ? websiteState.toolLeaveSteps : [];
-  const choices = Array.isArray(websiteState.toolChoices) ? websiteState.toolChoices : [];
-  const finishRate = engaged ? Math.round((finished / engaged) * 100) : 0;
-  const abandoned = Math.max(0, engaged - finished);
-
-  if (!engaged && !leaveSteps.length && !choices.length) {
-    return `
-      <section class="wt-panel wt-quotetool">
-        <header class="wt-panel__head">
-          <div><h4>Inside the quote tool</h4><p>The product, style and colour chosen on each screen, and how far people get.</p></div>
-        </header>
-        <p class="wt-empty">Nothing recorded yet. The tool reports its own steps through WindowCAD&rsquo;s Analytics JavaScript and the site relays them &mdash; both halves have to be live before anything appears here.</p>
-      </section>
-    `;
-  }
-
-  const maxLeave = Math.max(1, ...leaveSteps.map((row) => Number(row.count || 0)));
-  return `
-    <section class="wt-panel wt-quotetool">
-      <header class="wt-panel__head">
-        <div><h4>Inside the quote tool</h4><p>The product, style and colour chosen on each screen, and how far people get.</p></div>
-        <strong class="wt-panel__figure">${finishRate}%<small>engaged to quote</small></strong>
-      </header>
-      <div class="wt-consent__figures">
-        <article><strong>${wtFmt(opened)}</strong><span>Opened</span></article>
-        <article><strong>${wtFmt(engaged)}</strong><span>Actually used it</span></article>
-        <article><strong>${wtFmt(finished)}</strong><span>Got a quote</span></article>
-        <article><strong>${wtFmt(abandoned)}</strong><span>Gave up inside</span></article>
-      </div>
-      ${choices.length ? `
-        <h5 class="wt-quotetool__head">What they choose</h5>
-        <div class="wt-funnel__steps">
-          ${choices.map((row) => `
-            <div class="wt-funnel__step">
-              <span class="wt-funnel__label">${escapeHtml(String(row.choice || ""))}</span>
-              <span class="wt-funnel__bar"><i style="width:${Math.max(3, Math.round((Number(row.count || 0) / Math.max(1, ...choices.map((c) => Number(c.count || 0)))) * 100))}%"></i></span>
-              <span class="wt-funnel__value">${wtFmt(Number(row.count || 0))}</span>
-            </div>
-          `).join("")}
-        </div>
-      ` : ""}
-      ${leaveSteps.length ? `
-        <h5 class="wt-quotetool__head">Where they gave up</h5>
-        <div class="wt-funnel__steps">
-          ${leaveSteps.map((row) => `
-            <div class="wt-funnel__step">
-              <span class="wt-funnel__label">${escapeHtml(String(row.step || "unnamed screen"))}</span>
-              <span class="wt-funnel__bar"><i style="width:${Math.max(3, Math.round((Number(row.count || 0) / maxLeave) * 100))}%"></i></span>
-              <span class="wt-funnel__value">${wtFmt(Number(row.count || 0))}</span>
-            </div>
-          `).join("")}
-        </div>
-      ` : ""}
-    </section>
-  `;
-}
-
 function wtConsent() {
   const consent = websiteState.consent || {};
   const necessaryOnly = Number(consent.necessaryOnly || 0);

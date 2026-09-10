@@ -4132,3 +4132,10 @@ dialog::backdrop {
 
 .wc-warn { color: var(--amber); }
 .wc-warn b { font-size: 1.05rem; margin-right: 4px; }
+
+.wc-note {
+  margin: 10px 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--muted);
+}

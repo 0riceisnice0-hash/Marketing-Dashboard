@@ -436,16 +436,16 @@ async function refreshDashboard() {
     const next = normalizeState(await api("/api/bootstrap"));
     notifyNewItems(next);
     state = next;
+    // The website and quote tool tabs read on open, a period or Refresh only: no 60 s re-read
+    // (D1 reads audit 10/11: an open tab read ~1.6M rows a minute).
     if (current === "tracker" || current === "windowcad") {
-      await loadWebsite(true);
+      return;
     } else if (current === "reception") {
       await loadReception(true);
     } else if (current === "projects" && selectedProjectKey === "tools") {
       if (toolsTab === "meta") {
         await api("/api/fenster/meta/sync", { method: "POST", body: {} });
         await loadFenster(true);
-      } else if (toolsTab === "website") {
-        await loadWebsite(true);
       }
     }
     else render();
